@@ -1,0 +1,120 @@
+---
+title: "Kern County Fields Through Time"
+author: "Iris Foxfoot"
+date: "1/17/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(sf)
+library(tidyverse)
+library(here)
+library(raster)
+library(tmap)
+library(janitor)
+```
+
+```{r}
+#read in data
+
+kern_16 <- read_sf(here("data", "kernfields", "kern2016", "kern2016.shp"))
+
+crs(kern_16)
+
+kern_16 <- st_make_valid(kern_16)
+
+kern_17 <- read_sf(here("data", "kernfields", "kern2017", "kern2017.shp"))
+
+crs(kern_17)
+
+kern_17 <- st_make_valid(kern_17)
+
+kern_18 <- read_sf(here("data", "kernfields", "kern2018", "kern2018.shp"))
+
+crs(kern_18)
+
+kern_18 <- st_make_valid(kern_18)
+
+kern_19 <- read_sf(here("data", "kernfields", "kern2019", "kern2019.shp"))
+
+kern_crs <-crs(kern_19)
+
+kern_19 <- st_make_valid(kern_19)
+
+kern_county <- read_sf(here("data", "Kern_County_Boundary", "Kern_County_Boundary.shp")) %>% 
+  st_transform(., kern_crs)
+```
+
+```{r}
+#clean names, make sure each polygon has same number of rows
+
+kern_16_clean <- kern_16 %>% 
+  clean_names() %>% 
+  mutate(symbol = NA) %>% 
+  mutate(comm_code = NA)
+
+kern_17_clean <- kern_17 %>% 
+  clean_names()
+
+kern_18_clean <- kern_18 %>% 
+  clean_names()
+
+kern_19_clean <- kern_19 %>% 
+  clean_names
+```
+
+```{r}
+#crop
+
+#select region (based off of farmer)
+kern_subset <- kern_19_clean %>% 
+  filter(agent == "McMANUS/WILSON,MICHELE/AARIN")
+
+plot(kern_subset["p_status"])
+
+#crop
+kern_19_crop <- st_crop(kern_19_clean, kern_subset) %>% 
+  mutate(ID = 479:937)
+
+plot(kern_19_crop["p_status"])
+
+kern_18_crop <- st_crop(kern_18_clean, kern_subset) %>% 
+  mutate(ID = 1:478)
+
+kern_county_crop <- st_crop(kern_county, kern_subset)
+
+plot(kern_county_crop["FID"])
+```
+
+```{r}
+kern_18_intersection <-
+  st_join(kern_18_crop, kern_19_crop)
+
+kern_19_to_merge <- kern_19_crop %>% 
+  filter(!ID %in% kern_18_intersection$ID.1)
+
+plot(kern_19_to_merge ["p_status"])
+
+kern1819_intersect <- st_union(kern_19_intersection, kern_19_to_merge)
+```
+
+```{r}
+#DOES NOT WORK, IS DROPPING NON INTERSECTING POLYGONS
+plot(kern1819_intersect ["p_status"], main = "Intersect")
+plot(kern_19_crop["p_status"], main = "2019")
+plot(kern_18_crop["p_status"], main = "2018")
+```
+
+```{r}
+library(stampr)
+
+library(sp)
+
+kern_18_crop_sp <- as(kern_18_crop, "Spatial")
+
+kern_19_crop_sp <- as(kern_19_crop, "Spatial")
+
+stamp(kern_18_crop_sp, kern_18_crop_sp)
+
+```

@@ -1,0 +1,159 @@
+---
+title: "Difference Map"
+author: "Iris Foxfoot"
+date: "2/1/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(raster)
+library(here)
+library(sf)
+library(tidyverse)
+library(fasterize)
+```
+
+```{r}
+#read in cropped wieslander data (previously cropped to kern county)
+wieslander_data <- read_sf(here("data", "wieslander_clipped_kern.gpkg"))
+
+
+#read in backcast tif (previously cropped to kern county)
+backcast_data <- raster(here("data", "modeled_1938.tif"))
+
+```
+
+```{r}
+#view both
+plot(backcast_data)
+
+plot(st_geometry(wieslander_data))
+
+#we can see they are in different projections, so we change one to another
+backcast_data_reproj <- raster::projectRaster(backcast_data, crs = crs(wieslander_data))
+
+#check crs to make sure transition worked
+crs(backcast_data_reproj)
+crs(wieslander_data)
+```
+
+### Part 1. Difference Map
+
+```{r}
+#now we create a binary crop/no crop raster by reclassifying the backcast data
+
+#reclass df
+reclass_df <- c(12.5, 13.5, 1,
+              -Inf, 12.5, 0,
+             13.5, Inf, 0)
+
+#reclass matrix
+reclass_m <- matrix(reclass_df,
+                ncol = 3,
+                byrow = TRUE)
+
+#reclass raster
+crop_raster_1938 <- reclassify(backcast_data_reproj, reclass_m)
+
+#confirms we have only 0 and 1
+hist(crop_raster_1938)
+
+#looks about right
+plot(crop_raster_1938)
+```
+
+```{r}
+#now we have to do the same with the wieslander, with the extra step of converting to a raster
+
+#first step is to make an extra raster to "write" the rasterized wieslander data to
+raster_template <- backcast_data_reproj
+
+#then we create a new col with bindary crop info in the wieslander shapefile
+wies_binary <- wieslander_data %>% 
+  mutate(binary = case_when(WHR1_TYPE == "Cropland"~2, T ~ 0))
+
+#now we rasterize
+wies_raster <- fasterize::fasterize(wies_binary, raster_template, field = "binary")
+
+#check with hist
+hist(wies_raster)
+
+#plot
+plot(wies_raster)
+```
+
+```{r}
+#now we just stack the two and add
+rasters_overlayed<- overlay(crop_raster_1938, wies_raster, fun=sum)
+
+pal <- colorRampPalette(c("gray", "blue","yellow", "purple"))
+
+#plot
+plot(rasters_overlayed,
+     col = pal(4),
+    legend = F)
+legend("topright", 
+       legend = c("No Crops", "Backcast Crops", "Wies Crops", "Both Layer Crops"), 
+       fill = pal(4))
+```
+### Part 2. Shrubs and Grassland Analysis
+
+```{r}
+#convert backcast raster to polygon
+backcast_poly <- rasterToPolygons(backcast_data_reproj, fun=NULL, n=4, na.rm=TRUE, digits=12, dissolve=FALSE)
+
+#convert to sf object
+backcast_sf <- st_as_sf(backcast_poly)
+
+#filter for shrubland and grassland
+shrub <- backcast_sf %>% 
+  filter(modeled_1938 == 12)
+
+grass <- backcast_sf %>% 
+  filter(modeled_1938 == 11)
+```
+
+
+```{r}
+#get unique veg types, associate with ID type
+veg_types <- as.data.frame(unique(wies_binary$WHR1_TYPE)) %>% 
+  rownames_to_column("species_id") %>% 
+  rename(WHR1_TYPE = `unique(wies_binary$WHR1_TYPE)`)
+
+#bind numeric id to species type
+wies_species_id <- merge(wies_binary, veg_types, by = "WHR1_TYPE")
+
+#convert id to numeric term
+wies_species_id$species_id <- as.numeric(wies_species_id$species_id)
+
+#rasterize wies so each cell has species id
+wies_raster_vegtypes <- fasterize::fasterize(wies_species_id, raster_template, field = "species_id")
+
+r <- ratify(wies_raster_vegtypes)
+rat <- levels(r)[[1]]
+rat$landcover <- veg_types$WHR1_TYPE
+rat$code <- veg_types$species_id
+levels(r) <- rat
+r
+
+```
+
+```{r}
+#crop wieslander veg raster that are in backcast shrub or grassland areas
+
+#shrub
+shrub_wies_values <- mask(wies_raster_vegtypes, shrub)
+
+hist(shrub_wies_values, main = "grass")
+
+plot(shrub_wies_values, main = "shrubs")
+
+#grass
+grass_wies_values <- mask(wies_raster_vegtypes, grass)
+
+plot(grass_wies_values, main = "grass")
+
+hist(grass_wies_values, main = "grass")
+```
+

@@ -1,0 +1,117 @@
+---
+title: "Storie"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r packages}
+
+library(rgdal) 
+library(tidyverse) 
+library(sf) 
+
+```
+
+```{r soil_loop}
+soil_layers <- c("666","668","669","670","675","682","691","760","772")
+
+for(layer in soil_layers){
+
+  ### Data ###
+  soil_shp <- read_sf(paste0("R_input/spatial/SSURGO/CA",layer,"/spatial/soilmu_a_ca",layer,".shp")) %>% 
+    st_transform(.,"+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
+    group_by(MUKEY) %>% 
+    summarise()
+  
+  ### Component Key -- Contains Join keys to join polygons to Storie Index ###
+  comp <- read_delim(paste0("R_input/spatial/SSURGO/CA",layer,"/tabular/comp.txt"), delim = "|", col_names = F) %>% 
+    dplyr::select(ncol(.)-1,ncol(.))
+  colnames(comp) <- c("MUKEY","COKEY")
+  
+  ### Component interpretation -- contains CA Revised Storie Index data ###
+  cointerp <- read_delim(paste0("R_input/spatial/SSURGO/CA",layer,"/tabular/cinterp.txt"),delim = "|", col_names = F)
+  colnames(cointerp) <- c("COKEY","mainrulekey","mainrulename","seqnum","rulekey",
+                          "rulename","rule depth","interpl","interpllc","interplRV",
+                          "interplrc", "interphr","interphrc","interphh","interphhc",
+                          "nullpropodatabool","defpropdatabool","incpropdatabool","cointerpkey")
+
+  cointerp_fltr <-  cointerp %>% filter(mainrulekey == 17094 & rulekey == 17094)
+  
+  soil_comp <- merge(soil_shp,comp)
+  
+  soil_all = merge(soil_comp,cointerp_fltr) %>% 
+    arrange(-interphr) %>% 
+    group_by(MUKEY) %>% 
+    slice(1) %>% 
+    ungroup()
+
+  cointerp_Xchem = cointerp %>% 
+    filter(str_detect(rulename,"Factor X")) %>% 
+    filter(str_detect(rulename,"chemistry")) %>% 
+    dplyr::select(COKEY,cointerpkey, rulename,rulekey,interphr, interphrc)
+  
+  cointerp_Xtemp = cointerp %>% 
+    filter(str_detect(rulename,"Factor X")) %>% 
+    filter(str_detect(rulename,"temperature"))%>% 
+    dplyr::select(COKEY,cointerpkey,rulename,rulekey,interphr,interphrc)
+  
+  cointerp_Xhydro = cointerp %>% 
+    filter(str_detect(rulename,"Factor X")) %>% 
+    filter(str_detect(rulename,"hydrologic"))%>% 
+    dplyr::select(COKEY,cointerpkey, rulename,rulekey,interphr, interphrc)
+  
+  soil_x = merge(soil_comp, cointerp_Xchem)
+  soil_x = merge(soil_x, cointerp_Xtemp, by = c("COKEY"), all = TRUE, suffixes = c('_Xc','_Xt'))
+  soil_x = merge(soil_x, cointerp_Xhydro, by = c("COKEY"), all = TRUE)
+  
+  colnames(soil_x)[3:17] <- c("cintrky_Xc","rlnm_Xc","rlky_Xc","intrhr_Xc","intrhrc_Xc",
+                              "cintrky_Xt","rlnm_Xt","rlky_Xt","intrhr_Xt","intrhrc_Xt",
+                              "cintrky_Xh","rlnm_Xh","rlky_Xh","intrhr_Xh","intrhrc_Xh")
+  colnames(soil_x)
+  
+  assign(paste0("soil",layer),soil_all)
+  assign(paste0("soil_factX_", layer), soil_x)
+  rm(soil_all,soil_comp,soil_shp,comp,cointerp,cointerp_fltr, soil_x, cointerp_Xtemp, cointerp_Xchem, cointerp_Xhydro)
+    
+}
+
+all_soil = rbind(soil666,soil668,soil669,soil670,soil675,soil682,soil691,soil760,soil772)
+all_soil_factX = rbind(soil_factX_666,soil_factX_668,soil_factX_669,soil_factX_670,soil_factX_675,
+                       soil_factX_682,soil_factX_691,soil_factX_760,soil_factX_772)
+
+
+plss <- read_sf("R_input/spatial/Kern_County_Boundary/Kern_County_Boundary.shp") %>% 
+  st_transform(.,"+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
+  summarise()
+
+kern_soil <- st_intersection(all_soil,plss)
+kern_soil_factX <- st_intersection(all_soil_factX,plss)
+
+plot(kern_soil ['COKEY'])
+
+plot(kern_soil_factX ['COKEY'])
+
+
+# both having issue writing long numbers in field that starts with "cntrpky"!!!
+
+writeOGR(as_Spatial(kern_soil), 
+         dsn = "R_input/spatial/SSURGOsoil",
+         layer = "storie_index_soil",
+         'ESRI Shapefile',
+         overwrite_layer = T)
+
+writeOGR(as_Spatial(kern_soil_factX), 
+         dsn = "R_input/spatial/SSURGOsoil",
+         layer = "storie_index_factorX",
+         'ESRI Shapefile',
+         overwrite_layer = T)
+```
+
+```{r}
+# meprobit Kg`out'Ha100 i.pur_cdfa_org lnhectares soil_quality lnfarmSz ||PermFam:|| year:, vce(robust);
+# mixed lnKg`out'Ha100 i.pur_cdfa_org lnhectares soil_quality lnfarmSz if Kg`out'Ha100>0||PermFam:|| year:, vce(robust)
+```
+
