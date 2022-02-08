@@ -91,6 +91,7 @@ pal <- colorRampPalette(c("gray", "blue","yellow", "purple"))
 
 #plot
 plot(rasters_overlayed,
+     main = "cropland difference map",
      col = pal(4),
     legend = F)
 legend("topright", 
