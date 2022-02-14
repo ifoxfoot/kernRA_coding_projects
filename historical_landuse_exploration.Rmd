@@ -16,7 +16,11 @@ library(fasterize)
 
 ```{r}
 #read in cropped wieslander data (previously cropped to kern county)
-wieslander_data <- read_sf(here("data", "wieslander_clipped_kern.gpkg"))
+wieslander_data <- read_sf(here("data", "wieslander_clipped_kern.gpkg")) %>% 
+  st_make_valid()
+
+#get rid of whitespace problem  
+wieslander_data$WHR1_TYPE <- str_trim(wieslander_data$WHR1_TYPE)
 
 
 #read in backcast tif (previously cropped to kern county)
@@ -32,6 +36,8 @@ plot(st_geometry(wieslander_data))
 
 #we can see they are in different projections, so we change one to another
 backcast_data_reproj <- raster::projectRaster(backcast_data, crs = crs(wieslander_data))
+
+proj_crs <- crs(wieslander_data)
 
 #check crs to make sure transition worked
 crs(backcast_data_reproj)
@@ -113,48 +119,75 @@ shrub <- backcast_sf %>%
 
 grass <- backcast_sf %>% 
   filter(modeled_1938 == 11)
-```
 
-
-```{r}
-#get unique veg types, associate with ID type
-veg_types <- as.data.frame(unique(wies_binary$WHR1_TYPE)) %>% 
-  rownames_to_column("species_id") %>% 
-  rename(WHR1_TYPE = `unique(wies_binary$WHR1_TYPE)`)
-
-#bind numeric id to species type
-wies_species_id <- merge(wies_binary, veg_types, by = "WHR1_TYPE")
-
-#convert id to numeric term
-wies_species_id$species_id <- as.numeric(wies_species_id$species_id)
-
-#rasterize wies so each cell has species id
-wies_raster_vegtypes <- fasterize::fasterize(wies_species_id, raster_template, field = "species_id")
-
-r <- ratify(wies_raster_vegtypes)
-rat <- levels(r)[[1]]
-rat$landcover <- veg_types$WHR1_TYPE
-rat$code <- veg_types$species_id
-levels(r) <- rat
-r
-
-```
-
-```{r}
-#crop wieslander veg raster that are in backcast shrub or grassland areas
+#crop wieslander veg layer to backcast shrub or grassland
 
 #shrub
-shrub_wies_values <- mask(wies_raster_vegtypes, shrub)
+shrub_wies_values <- st_intersection(wieslander_data, shrub)
 
-hist(shrub_wies_values, main = "grass")
-
-plot(shrub_wies_values, main = "shrubs")
+plot(st_geometry(shrub_wies_values))
 
 #grass
-grass_wies_values <- mask(wies_raster_vegtypes, grass)
+grass_wies_values <- st_intersection(wieslander_data, grass)
 
-plot(grass_wies_values, main = "grass")
+plot(st_geometry(shrub_wies_values))
 
-hist(grass_wies_values, main = "grass")
+#make histograms
+
+#shrub
+shrub_veg_types <- shrub_wies_values %>% 
+  group_by(WHR1_TYPE) %>% 
+  summarise(area = sum(AREA_HA))
+  
+ggplot(data = shrub_veg_types) +
+  geom_col(aes(y = reorder(WHR1_TYPE, area), x = area)) +
+  labs(x = "Area (Hectares)", y = "Veg Type",
+       title = "Weislander vegetation for backcast shrubland") +
+  theme_minimal() +
+  theme(text = element_text(size=10))
+
+#grass
+grass_veg_types <- grass_wies_values %>% 
+  group_by(WHR1_TYPE) %>% 
+  summarise(area = sum(AREA_HA))
+  
+ggplot(data = grass_veg_types) +
+  geom_col(aes(y = reorder(WHR1_TYPE, area), x = area)) +
+  labs(x = "Area (Hectares)", y = "Veg Type",
+       title = "Weislander vegetation for backcast grassland") +
+  theme_minimal() +
+  theme(text = element_text(size=10))
+```
+
+### Part 3. What was converted to crops?
+
+```{r, cache=TRUE}
+#turn off scientific notation for viz
+options(scipen = 100)
+
+#read in unioned field file (made in previous workflow)
+present_day_fields <- read_sf(here("data", "shapefiles_written", "unioned_fields_20162019", "unioned_fields_20162019.shp")) %>% 
+  st_transform(., proj_crs) %>% 
+  st_make_valid()
+
+#crop weis veg values to present day crops
+veg_before_crops <- st_intersection(wieslander_data, present_day_fields)
+
+#plot to check it worked
+plot(st_geometry(veg_before_crops))
+
+#group by veg type and sum area
+grouped_veg <- veg_before_crops %>% 
+  group_by(WHR1_TYPE) %>% 
+  summarise(area_ha = sum(AREA_HA))
+
+
+#plot it
+ggplot(data = grouped_veg) +
+  geom_col(aes(y = reorder(WHR1_TYPE, area_ha), x = area_ha)) +
+  labs(x = "Area (Hectares)", y = "Veg Type",
+       title = "Vegetation types of present-day fields") +
+  theme_minimal() +
+  theme(text = element_text(size=10))
 ```
 
