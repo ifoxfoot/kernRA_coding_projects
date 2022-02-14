@@ -91,7 +91,7 @@ plot(kern_county_crop["FID"])
 
 ```{r}
 # Convert to tibble for a dplyr full join on the geometry column.
-kern1819_intersect <- full_join(as_tibble(kern_18_crop), as_tibble(kern_19_crop), by = "geometry")
+kern1819_intersect <- full_join(as_tibble(kern_19_crop), as_tibble(kern_18_crop), by = "geometry")
 
 kern_1819_sf <- st_as_sf(kern_18_intersection)
 ```
@@ -99,27 +99,74 @@ kern_1819_sf <- st_as_sf(kern_18_intersection)
 ```{r}
 #DOES NOT WORK, IS DROPPING NON INTERSECTING POLYGONS
 
-plot(kern_19_crop["p_status"], main = "2019")
-plot(kern_18_crop["p_status"], main = "2018")
-plot(kern_1819_sf ["p_status.x"], main = "Intersect")
+plot(st_geometry(kern_19_crop), main = "2019")
+plot(st_geometry(kern_18_crop), main = "2018")
+plot(st_geometry(kern_1819_sf), main = "Intersect")
 ```
 
 ```{r}
 library(stampr)
 library(sp)
+library(smoothr)
 
+#rbind inputs, create ID column
 croped_fields_binded <- rbind(kern_18_crop, kern_19_crop) %>% 
   st_make_valid() %>% 
   rownames_to_column(var="ID")
 
-
+#conver to spatial
 cropped_sp <- as(croped_fields_binded, "Spatial")
 
+#use the stamp function to assess space-time change
 stamp_test <- stamp.multichange(cropped_sp, changeByField = T, changeField = "year", dc = 0, distance = TRUE, direction = F)
 
-stamp_test_sf <- st_as_sf(stamp_test)
+#drop geometry "crumbs"
+stamp_test_crumbs <- drop_crumbs(stamp_test, threshold = 1, drop_empty = T)
 
-plot(stamp_test_sf["GROUP"])
+#convert back to sf
+stamp_test_sf <- st_as_sf(stamp_test_crumbs) %>% 
+  st_make_valid()
 
-st_write(stamp_test_sf, here("data", "shapefiles_written", "stamp_test.shp"), driver = "ESRI Shapefile")
+
+
+#task is somewhat computationally intensive...write to shapefile after
+
+#st_write(stamp_test_sf, here("data", "shapefiles_written", "stamp_test.shp"), driver = "ESRI Shapefile")
 ```
+
+```{r}
+#THIS APPEARS TO WORK...NEED TO DROP CRUMBS
+plot(st_geometry(kern_19_crop), main = "2019")
+plot(st_geometry(kern_18_crop), main = "2018")
+plot(st_geometry(stamp_test_sf), main = "Stamp_test")
+
+library(tmap)
+
+tmap_mode("view")
+
+tm_shape(stamp_test_sf) +
+tm_polygons("GROUP")
+```
+
+STAMP interp
+
+ID1 Polygon ID from T1 polygons; NA if it did not exist,
+ID2 Polygon ID from T2 polygons; NA if it did not exist,
+LEV1 Level 1 STAMP designation,
+LEV2 Level 2 STAMP designation,
+LEV3 Level 3 STAMP designation,
+LEV4 Level 4 STAMP designation,
+GROUP Group ID signifying group membership,
+AREA Polygon area in appropriate areal units,
+-- (optional) Additional columns from directional analysis if direction = TRUE,
+-- (optional) Additional columns from distance analysis if distance = TRUE,
+
+
+STAMP events are reported at four levels of increasing complexity:
+LEV1 – disappearance (DISA), stable (STBL), and generation (GENA);
+LEV2 – disappearance (DISA), contraction (CONT), stable (STBL), expansion (EXPN), and generation
+(GENR);
+LEV3 – disappearance (DISA), T1 displacement (DISP1), convergence (CONV), concentration (CONC),
+contraction (CONT), stable (STBL), expansion (EXP), fragmentation (FRAG), divergence (DIV), T2 displacement (DISP2), and generation (GENR);
+LEV4 – LEV4 is different from other levels. It is used to identify those groups where union (UNION),
+division (DIVISION), and both union and division (BOTH) events occur. 
