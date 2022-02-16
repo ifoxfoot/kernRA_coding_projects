@@ -93,11 +93,25 @@ plot(kern_county_crop["FID"])
 # Convert to tibble for a dplyr full join on the geometry column.
 kern1819_intersect <- full_join(as_tibble(kern_19_crop), as_tibble(kern_18_crop), by = "geometry")
 
-kern_1819_sf <- st_as_sf(kern_18_intersection)
+kern_1819_sf <- st_as_sf(kern1819_intersect)
+
+tmap_mode("view")
+
+tm_shape(kern_1819_sf) +
+  tm_polygons(c("pmt_site.x", "pmt_site.y"), legend.show = FALSE)
 ```
 
 ```{r}
-#DOES NOT WORK, IS DROPPING NON INTERSECTING POLYGONS
+tm_shape(kern_18_crop) +
+  tm_polygons("pmt_site", legend.show = FALSE)
+```
+
+```{r}
+tm_shape(kern_19_crop) +
+  tm_polygons("pmt_site", legend.show = FALSE)
+```
+
+```{r}
 
 plot(st_geometry(kern_19_crop), main = "2019")
 plot(st_geometry(kern_18_crop), main = "2018")
@@ -121,13 +135,13 @@ cropped_sp <- as(croped_fields_binded, "Spatial")
 stamp_test <- stamp.multichange(cropped_sp, changeByField = T, changeField = "year", dc = 0, distance = TRUE, direction = F)
 
 #drop geometry "crumbs"
-stamp_test_crumbs <- drop_crumbs(stamp_test, threshold = 1, drop_empty = T)
+#stamp_test_crumbs <- drop_crumbs(stamp_test, threshold = 1, drop_empty = T)
 
 #convert back to sf
-stamp_test_sf <- st_as_sf(stamp_test_crumbs) %>% 
+stamp_test_sf <- st_as_sf(stamp_test) %>% 
   st_make_valid()
 
-
+head(stamp_test_sf)
 
 #task is somewhat computationally intensive...write to shapefile after
 
@@ -170,3 +184,7 @@ LEV3 – disappearance (DISA), T1 displacement (DISP1), convergence (CONV), conc
 contraction (CONT), stable (STBL), expansion (EXP), fragmentation (FRAG), divergence (DIV), T2 displacement (DISP2), and generation (GENR);
 LEV4 – LEV4 is different from other levels. It is used to identify those groups where union (UNION),
 division (DIVISION), and both union and division (BOTH) events occur. 
+
+
+
+
