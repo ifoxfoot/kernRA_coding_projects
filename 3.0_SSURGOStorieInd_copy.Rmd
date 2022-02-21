@@ -90,28 +90,30 @@ plss <- read_sf("R_input/spatial/Kern_County_Boundary/Kern_County_Boundary.shp")
 kern_soil <- st_intersection(all_soil,plss)
 kern_soil_factX <- st_intersection(all_soil_factX,plss)
 
-plot(kern_soil ['COKEY'])
 
-plot(kern_soil_factX ['COKEY'])
+# both having issue writing long numbers in field that starts with "cntrpky"
 
+# writeOGR(as_Spatial(kern_soil), 
+#          dsn = "R_input/spatial/SSURGOsoil",
+#          layer = "storie_index_soil",
+#          'GPKG',
+#          overwrite_layer = T)
 
-# both having issue writing long numbers in field that starts with "cntrpky"!!!
+st_write(kern_soil, "R_input/spatial/SSURGOsoil/kern_soil.gpkg", "storie_index_soil", append=FALSE)
 
-writeOGR(as_Spatial(kern_soil), 
-         dsn = "R_input/spatial/SSURGOsoil",
-         layer = "storie_index_soil",
-         'ESRI Shapefile',
-         overwrite_layer = T)
+# writeOGR(as_Spatial(kern_soil_factX), 
+#          dsn = "R_input/spatial/SSURGOsoil",
+#          layer = "storie_index_factorX",
+#          'GPKG',
+#          overwrite_layer = T)
 
-writeOGR(as_Spatial(kern_soil_factX), 
-         dsn = "R_input/spatial/SSURGOsoil",
-         layer = "storie_index_factorX",
-         'ESRI Shapefile',
-         overwrite_layer = T)
+st_write(kern_soil_factX, "R_input/spatial/SSURGOsoil/kern_soil_factX.gpkg", "storie_index_factorX", append=FALSE)
 ```
 
 ```{r}
 # meprobit Kg`out'Ha100 i.pur_cdfa_org lnhectares soil_quality lnfarmSz ||PermFam:|| year:, vce(robust);
 # mixed lnKg`out'Ha100 i.pur_cdfa_org lnhectares soil_quality lnfarmSz if Kg`out'Ha100>0||PermFam:|| year:, vce(robust)
 ```
+
+
 
