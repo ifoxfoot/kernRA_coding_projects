@@ -20,10 +20,10 @@ library(janitor)
 #must have the following file path in working directory: data/kernfields/kernYEAR/kernYEAR.shp
 
 #create list of years
-kern_field_layers <- c(2016:2019)
+kern_field_years <- c(2016:2019)
 
 #loop through read in process
-for (i in kern_field_layers) {
+for (i in kern_field_years) {
   filename <- paste0("kernfields_", i)
   wd <- paste0("data/kernfields/kern", i, "/kern", i, ".shp")
   assign(filename, read_sf(wd))
@@ -32,6 +32,15 @@ for (i in kern_field_layers) {
 #read in kern county shapefile
 kern_county <- read_sf(here("data", "Kern_County_Boundary", "Kern_County_Boundary.shp")) %>% 
   st_transform(crs = crs(kernfields_2016))
+
+#create processing loop. This loop will do the following
+#transform and clean geometries
+#select permitsiteID
+#extract SSURGO soil quality
+#rbind
+#create unique ID
+#create year column
+
 ```
 
 ```{r}
