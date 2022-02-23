@@ -16,32 +16,52 @@ library(janitor)
 ```
 
 ```{r}
-#read in data
+#read in kern county shapefile
+kern_county <- read_sf(here("data", "Kern_County_Boundary", "Kern_County_Boundary.shp")) %>% 
+  st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+
+#read in SSURGO data
+soil_quality <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil.gpkg")) %>% 
+  st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+
+soil_quality_factX <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil_factX.gpkg"))%>% 
+  st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+
+#read in kern data
 #must have the following file path in working directory: data/kernfields/kernYEAR/kernYEAR.shp
 
 #create list of years
-kern_field_years <- c(2016:2019)
+kern_field_years <- c(2005:2019)
 
 #loop through read in process
 for (i in kern_field_years) {
   filename <- paste0("kernfields_", i)
-  wd <- paste0("data/kernfields/kern", i, "/kern", i, ".shp")
+  wd <- paste0("data/kernfields/kern", i, ".shp")
   assign(filename, read_sf(wd))
 }
 
-#read in kern county shapefile
-kern_county <- read_sf(here("data", "Kern_County_Boundary", "Kern_County_Boundary.shp")) %>% 
-  st_transform(crs = crs(kernfields_2016))
+#loop through tidying process
+result <- lapply(mget(sprintf("kernfields_%d", 2005:2019)), 
+                 function(x) 
+                   {
+                   clean_names(x) %>%
+                     st_make_valid() %>% 
+                     st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
+                     dplyr::select(pmt_site)
+                   #still need year column!
+                     }
+                 )
 
-#create processing loop. This loop will do the following
-#transform and clean geometries
-#select permitsiteID
+list2env(result, .GlobalEnv)
+
+
 #extract SSURGO soil quality
 #rbind
 #create unique ID
-#create year column
+
 
 ```
+
 
 ```{r}
 #clean names, make sure each polygon has same number of rows

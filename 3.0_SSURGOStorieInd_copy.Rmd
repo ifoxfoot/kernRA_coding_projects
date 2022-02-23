@@ -116,4 +116,3 @@ st_write(kern_soil_factX, "R_input/spatial/SSURGOsoil/kern_soil_factX.gpkg", "st
 ```
 
 
-
