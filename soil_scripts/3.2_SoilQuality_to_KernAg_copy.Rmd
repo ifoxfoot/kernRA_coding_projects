@@ -1,0 +1,148 @@
+---
+title: "Rasterize Soil Quality (Storie Index) and add to Kern Ag Shapefile, and add agroclasses"
+author: "Claire Powers"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**The purpose of this Rmarkdown document is to add soil quality data to the Kern County Agriculture Polygons for each year. Soil Quality data is based on the Storie Index, which is a metric derived from SSURGO soil data. The shapefile was accessed at DataBasin.org**
+
+**Notes:**   
+
+  * This Rmarkdown document uses a function in the "3_Soil_to_KernAg.R" file. The function reads in year-specific Kern County Ag shapefile, then extracts values from the soil raster into each polygon. The final Storie_Index value is the mean of any values that were extracted into the polygon
+
+**Output:**
+* Shapefile with Storie Index data added to the Kern Ag shapefile attribute table
+     - ../R_output/spatial/KernAg_withSoil/[year]/KernAg_withSoil_[year].shp
+
+#### 1. Load packages, set working directory, and source the Soil_to_KernAg.R file which contains the function that takes rasterized Storie Index data and adds it to the Kern Agriculture Shapefile
+```{r get_packages}
+
+library(rgdal) 
+library(tidyverse) 
+library(sf) 
+library(sp) 
+library(raster) 
+library(fasterize)
+
+# Bring in function that adds rasterize Storie Index data to Kern Country Agriculture attribute table 
+source("../R/3_Soil_to_KernAg.R")
+```
+
+#### 2a. Preparing the Storie Index Shapefile to be rasterized. The Storie Index data is in factor format and needs to be numeric to be rasterized. This code chunk gives a numeric value to each factor level
+```{r prepare_StorieIndex_shapefile}
+# Read in Storie Index Soil Info
+soil_sf = read_sf("../R_input/spatial/SSURGOsoil/storie_index_soil.shp") %>% 
+  st_transform(.,"+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
+  dplyr::select(StorInd = intrphrc)
+
+## Add another column that gives a numeric value to the Storie Index soil rating. NA values given to values that were assigned 'NA' or 'Not appropriate for SI rating' in the original shapefile
+soil_sf$SI_number <- ifelse(str_detect(soil_sf$StorInd,"1"),1,
+                            ifelse(str_detect(soil_sf$StorInd,"2"),2,
+                                   ifelse(str_detect(soil_sf$StorInd,"3"),3,
+                                          ifelse(str_detect(soil_sf$StorInd,"4"),4,
+                                                 ifelse(str_detect(soil_sf$StorInd,"5"),5,
+                                                        ifelse(str_detect(soil_sf$StorInd,"6"),6,NA))))))
+
+summary(soil_sf$SI_number)
+
+## Convert soil dataframe back into a shapefile.
+soil_shp = as(soil_sf,"Spatial")
+```
+
+2b. Read in Factor X shapefiles
+```{r}
+soil_chem = read_sf("../R_input/spatial/SSURGOsoil/storie_index_factorX.shp") %>% 
+  st_transform(.,"+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
+  group_by(MUKEY) %>% 
+  summarise(soil_chem =  mean(intrhr_Xc, na.rm = T)) 
+
+soil_temp = read_sf("../R_input/spatial/SSURGOsoil/storie_index_factorX.shp") %>% 
+  st_transform(.,"+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
+  group_by(MUKEY) %>% 
+  summarise(soil_temp =  mean(intrhr_Xt, na.rm = T)) 
+
+soil_hydro = read_sf("../R_input/spatial/SSURGOsoil/storie_index_factorX.shp") %>% 
+  st_transform(.,"+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
+  group_by(MUKEY) %>% 
+  summarise(soil_hydro = mean(intrhr_Xh, na.rm = T)) 
+
+```
+
+
+#### 3. Rasterize Storie Index column
+```{r create_StorieIndex_raster}
+# Initialize empty raster
+ras = raster()
+
+# Set the raster extent based on the soil shapefile
+extent(ras) = extent(soil_raw)
+
+# Set raster resolution (meters)
+res(ras) = 60
+
+# Rasterize Storie Index shapefile on the SI_number attribute column
+soil_ras = fasterize(soil_sf, ras, field = "SI_number")
+chem_ras = fasterize(soil_chem, ras, field = "soil_chem")
+temp_ras = fasterize(soil_temp, ras, field = "soil_temp")
+hydro_ras = fasterize(soil_hydro, ras, field = "soil_hydro")
+
+# Define the CRS again
+crs(soil_ras) = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+crs(chem_ras) = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+crs(temp_ras) = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+crs(hydro_ras) = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+
+# # Save raster
+# dir.create("../R_output/spatial/SoilRaster/")
+# writeRaster(soil_ras, "../R_output/spatial/SoilRaster/soil_ras.tif", overwrite = T)
+# 
+# soil_ras = raster("../R_output/spatial/SoilRaster/soil_ras.tif")
+```
+
+## Fill in NA values with IDW soil raster
+```{r IDW_soil_NAvals}
+
+idw_soil_ras = raster("../R_output/spatial/SoilRaster/soil_ras_IDW.tif")
+idw_soil_ras = resample(x = idw_soil_ras,soil_ras)
+
+# introduce na in rst1 for all locations that are non-na in rst2
+soil_ras_covered <- cover(soil_ras,idw_soil_ras)
+
+# Check in QGIS
+# writeRaster(soil_ras_covered,"../R_output/scratch/na_filled.tif", overwrite = T)
+
+```
+
+
+#### 4. Use function to add Storie Index raster data to Kern County Ag shapefile attribute table. Function find the mean for polygons with multiple raster values. 
+```{r add_StorieIndex_to_AgData}
+# Define years to be evaluated
+years = 2013:2019
+
+dir.create("../R_output/spatial/KernAg_withSoil/")
+
+### Read in agroclass csv and join to ag_sf ###
+agro_class <- read_csv("../R_input/CSV/Kern_AG/comm_subgroups.csv")
+colnames(agro_class) <- c("COMM","COMM_EDIT","COMM_CODEOLD","COMM_CODE","GENUS","AGROCLASS","FAMILY")
+
+agro_class$COMM <- as.character(agro_class$COMM)
+# agro_class$COMM_CODE<- as.character(agro_class$COMM_CODE)
+
+# Apply function from the 3_SoilQuality_to_KernAg.R file to years specified. See notes in function for more details 
+for(i in years){
+  
+  Soil_to_KernAg_fun(i)
+  
+}
+
+timestamp()
+```
+
+
+

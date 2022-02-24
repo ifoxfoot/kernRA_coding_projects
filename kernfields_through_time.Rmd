@@ -7,61 +7,129 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(sf)
-library(tidyverse)
-library(here)
-library(raster)
-library(tmap)
-library(janitor)
 ```
 
-```{r}
-#read in kern county shapefile
-kern_county <- read_sf(here("data", "Kern_County_Boundary", "Kern_County_Boundary.shp")) %>% 
-  st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+```{r get_packages}
+knitr::opts_chunk$set(echo = TRUE)
+library(sf) #for polygons
+library(tidyverse) #for data wrangling
+library(here) #for file paths
+library(raster) #for rasters
+library(fasterize) #for making rasters
+library(tmap) #for interactive maps
+library(janitor) #for cleaning names
+library(stampr) #for space time analysis
+library(sp) #spatial polygons, required for stampr to work
+library(smoothr) #drops slivers
+```
+
+# Introduction
+
+# Read in Soil data and Rasterize It
+
+In this code chunk we read in soil data created previously in 3.0_SSURGOStorieInd_copy.rmd and rasterize it
+
+```{r rasterize_soil_data}
 
 #read in SSURGO data
-soil_quality <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil.gpkg")) %>% 
-  st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+soil_sf <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil.gpkg")) %>% 
+  st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")  %>% 
+  #NOTE use of `interphr` as storie index
+  dplyr::select(StorInd = interphr)
 
-soil_quality_factX <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil_factX.gpkg"))%>% 
-  st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+# Initialize empty raster
+ras = raster()
 
+# Set the raster extent based on the soil shapefile
+extent(ras) = extent(soil_sf)
+
+# Set raster resolution (meters)
+res(ras) = 60
+
+#rasterize
+soil_ras = fasterize(soil_sf, ras, field = "StorInd")
+
+# Define the CRS again
+crs(soil_ras) = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+
+#plot it (to check it worked)
+plot(soil_ras)
+
+#looks good!
+```
+
+# Read in field data and wrangle it
+
+In this section we read in the soil data and wrangle it such that the end product is a single dataframe containing shapefiles for fields in all years. We also need to add a unique ID column and a year column. 
+
+```{r field_data_wrangling}
 #read in kern data
-#must have the following file path in working directory: data/kernfields/kernYEAR/kernYEAR.shp
+#must have the following file path in working directory: data/kernfields/kernYEAR.shp
 
 #create list of years
 kern_field_years <- c(2005:2019)
 
-#loop through read in process
+#loop through read-in process
 for (i in kern_field_years) {
   filename <- paste0("kernfields_", i)
   wd <- paste0("data/kernfields/kern", i, ".shp")
   assign(filename, read_sf(wd))
 }
 
-#loop through tidying process
-result <- lapply(mget(sprintf("kernfields_%d", 2005:2019)), 
+#loop through listed sf objects and tidy
+fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2019)), 
                  function(x) 
                    {
+                   
                    clean_names(x) %>%
                      st_make_valid() %>% 
                      st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
-                     dplyr::select(pmt_site)
-                   #still need year column!
+                     dplyr::select(permit,
+                                   permittee,
+                                   pmt_site,
+                                   comm,
+                                   s_status,
+                                   p_status,
+                                   acres,
+                                   dt_act)
                      }
                  )
 
-list2env(result, .GlobalEnv)
+#unlist shapefiles
+list2env(fields_cleaned_list, .GlobalEnv)
 
+#rbind inputs, create ID column 
+#need to scale up this part
+all_fields_binded <- rbind(kernfields_2005, 
+                           kernfields_2006, 
+                           kernfields_2007,
+                           kernfields_2008)
 
-#extract SSURGO soil quality
-#rbind
-#create unique ID
+#make id column, get year
+all_fields <- all_fields_binded%>% 
+  st_make_valid() %>% 
+  rownames_to_column(var="ID") %>% 
+  mutate(year = y(dt_act))
 
-
+#convert to spatial
+all_fields_sp <- as(all_fields, "Spatial")
 ```
 
+```{r}
+
+#use the stamp function to assess space-time change
+stamp_test <- stamp.multichange(all_fields_sp, changeByField = T, changeField = "year", dc = 0, distance = F, direction = F)
+
+#drop geometry "crumbs"
+#stamp_test_crumbs <- drop_crumbs(stamp_test, threshold = 1, drop_empty = T)
+
+#convert back to sf
+stamp_test_sf <- st_as_sf(stamp_test) %>% 
+  st_make_valid()
+
+head(stamp_test_sf)
+
+```
 
 ```{r}
 #clean names, make sure each polygon has same number of rows
@@ -161,7 +229,7 @@ croped_fields_binded <- rbind(kern_18_crop, kern_19_crop) %>%
 cropped_sp <- as(croped_fields_binded, "Spatial")
 
 #use the stamp function to assess space-time change
-stamp_test <- stamp.multichange(cropped_sp, changeByField = T, changeField = "year", dc = 0, distance = TRUE, direction = F)
+stamp_test <- stamp.multichange(cropped_sp, changeByField = T, changeField = "year", dc = 0, distance = F, direction = F)
 
 #drop geometry "crumbs"
 #stamp_test_crumbs <- drop_crumbs(stamp_test, threshold = 1, drop_empty = T)
