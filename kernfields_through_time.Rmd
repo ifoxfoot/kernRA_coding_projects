@@ -6,7 +6,11 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(
+	echo = TRUE,
+	message = FALSE,
+	warning = FALSE
+)
 ```
 
 ```{r get_packages}
@@ -92,24 +96,32 @@ fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2019)),
                                    p_status,
                                    acres,
                                    dt_act)
+                   
                      }
                  )
 
-#unlist shapefiles
-list2env(fields_cleaned_list, .GlobalEnv)
 
-#rbind inputs, create ID column 
-#need to scale up this part
-all_fields_binded <- rbind(kernfields_2005, 
-                           kernfields_2006, 
-                           kernfields_2007,
-                           kernfields_2008)
+#rbind inputs
+all_fields_binded <- do.call(rbind, fields_cleaned_list) %>% 
+  st_make_valid()
+     
 
 #make id column, get year
 all_fields <- all_fields_binded%>% 
   st_make_valid() %>% 
   rownames_to_column(var="ID") %>% 
-  mutate(year = y(dt_act))
+  mutate(year = lubridate::year(dt_act)) %>% 
+  dplyr::select(-dt_act)
+
+#extract storie index value per each year
+all_fields_indexed <- raster::extract(soil_ras, all_fields, fun = mean)
+
+#bind to shapefiles
+all_fields_with_index <- cbind(all_fields, all_fields_indexed) %>% 
+  rename(interphr_score = all_fields_indexed)
+
+#recast as multipolygon
+all_fields <- st_cast(all_fields, "MULTIPOLYGON")
 
 #convert to spatial
 all_fields_sp <- as(all_fields, "Spatial")
@@ -127,8 +139,8 @@ stamp_test <- stamp.multichange(all_fields_sp, changeByField = T, changeField = 
 stamp_test_sf <- st_as_sf(stamp_test) %>% 
   st_make_valid()
 
-head(stamp_test_sf)
-
+#write shapefile
+st_write(stamp_test_sf, here("data", "shapefiles_written", "stamp_test_all_fields"), driver = "ESRI Shapefile")
 ```
 
 ```{r}
