@@ -1,0 +1,85 @@
+---
+title: "Stampr Final"
+author: "Iris Foxfoot"
+date: "3/4/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(sf) #for polygons
+library(tidyverse) #for data wrangling
+library(here) #for file paths
+library(tmap) #for interactive maps
+library(janitor) #for cleaning names
+library(stampr) #for space time analysis
+library(sp) #spatial polygons, required for stampr to work
+library(smoothr) #drops slivers
+```
+
+```{r}
+#read in kern data
+#must have the following file path in working directory: data/kernfields/kernYEAR.shp
+
+#create list of years
+kern_field_years <- c(2005:2019)
+
+#loop through read-in process
+for (i in kern_field_years) {
+  filename <- paste0("kernfields_", i)
+  wd <- paste0("data/kernfields/kern", i, ".shp")
+  assign(filename, read_sf(wd))
+}
+
+#loop through listed sf objects and tidy
+fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2019)), 
+                 function(x) 
+                   {
+                   
+                   clean_names(x) %>%
+                     st_make_valid() %>% 
+                     st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
+                     dplyr::select(permit,
+                                   permittee,
+                                   pmt_site,
+                                   comm,
+                                   s_status,
+                                   p_status,
+                                   acres,
+                                   dt_act)
+                   
+                     }
+                 )
+
+
+#rbind inputs
+all_fields_binded <- do.call(rbind, fields_cleaned_list) %>% 
+  st_make_valid()
+
+#make id column, get year
+all_fields <- all_fields_binded%>% 
+  st_make_valid() %>% 
+  rownames_to_column(var="ID") %>% 
+  mutate(year = lubridate::year(dt_act)) %>% 
+  dplyr::select(-dt_act)
+
+#recast as multipolygon
+all_fields <- st_cast(all_fields, "MULTIPOLYGON")
+
+#convert to spatial
+all_fields_sp <- as(all_fields, "Spatial")
+
+
+#use the stamp function to assess space-time change
+stamp_test <- stamp.multichange(all_fields_sp, changeByField = T, changeField = "year", dc = 0, distance = F, direction = F)
+
+#drop geometry "crumbs"
+#stamp_test_crumbs <- drop_crumbs(stamp_test, threshold = 1, drop_empty = T)
+
+#convert back to sf
+stamp_test_sf <- st_as_sf(stamp_test) %>% 
+  st_make_valid()
+
+#write shapefile
+st_write(stamp_test_sf, here("data", "shapefiles_written", "stamp_test_all_fields"), driver = "ESRI Shapefile")
+```

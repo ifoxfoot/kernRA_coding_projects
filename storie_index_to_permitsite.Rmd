@@ -1,0 +1,135 @@
+---
+title: "Storie Index Values and PermitSite ID"
+author: "Iris Foxfoot"
+date: "3/2/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(sf) #for polygons
+library(tidyverse) #for data wrangling
+library(here) #for file paths
+library(raster) #for rasters
+library(fasterize) #for making rasters
+```
+
+# Read in Soil data and Rasterize It
+
+In this code chunk we read in soil data created previously in 3.0_SSURGOStorieInd_copy.rmd and rasterize various components.
+
+```{r}
+#read in SSURGO data
+soil_sf <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil.gpkg")) %>% 
+  st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+
+
+soil_sf_classed <- soil_sf %>% 
+  mutate(interpllc_class = case_when(
+    str_detect(interpllc, "Grade 1") ~ 1,
+    str_detect(interpllc, "Grade 2") ~ 2,
+    str_detect(interpllc, "Grade 3") ~ 3,
+    str_detect(interpllc, "Grade 4") ~ 4,
+    str_detect(interpllc, "Grade 5") ~ 5,
+    str_detect(interpllc, "Grade 6") ~ 6,
+    str_detect(interpllc, "Not") ~ NA,
+    T ~ interpllc
+  ))
+
+unique(soil_sf$interpllc)
+
+# Initialize empty raster
+ras = raster()
+
+# Set the raster extent based on the soil shapefile
+extent(ras) = extent(soil_sf)
+
+# Set raster resolution (meters)
+res(ras) = 60
+
+#rasterize (each raster contains one storie index measure)
+
+#continuous values
+interpl = fasterize(soil_sf, ras, field = "interpl")
+interplRV = fasterize(soil_sf, ras, field = "interplRV")
+interphr = fasterize(soil_sf, ras, field = "interphr")
+interphh = fasterize(soil_sf, ras, field = "interphh")
+
+#classed values
+interpllc = fasterize(soil_sf, ras, field = "interpllc")
+interplrc = fasterize(soil_sf, ras, field = "interplrc")
+interphrc = fasterize(soil_sf, ras, field = "interphrc")
+interphhc = fasterize(soil_sf, ras, field = "interphhc")
+
+#create raster stack
+
+
+# Define the CRS again
+crs(soil_ras) = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+
+#plot it (to check it worked)
+plot(soil_ras)
+
+#looks good!
+```
+
+# Read in and process field data
+
+```{r}
+#read in kern field data
+#must have the following file path in working directory: data/kernfields/kernYEAR.shp
+
+#create list of years
+kern_field_years <- c(2005:2019)
+
+#loop through read-in process
+for (i in kern_field_years) {
+  filename <- paste0("kernfields_", i)
+  wd <- paste0("data/kernfields/kern", i, ".shp")
+  assign(filename, read_sf(wd))
+}
+
+#loop through listed sf objects and tidy
+fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2019)), 
+                 function(x) 
+                   {
+                   
+                   clean_names(x) %>%
+                     st_make_valid() %>% 
+                     st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
+                     dplyr::select(permit,
+                                   permittee,
+                                   pmt_site,
+                                   comm,
+                                   s_status,
+                                   p_status,
+                                   acres,
+                                   dt_act)
+                   
+                     }
+                 )
+
+
+#rbind inputs
+all_fields_binded <- do.call(rbind, fields_cleaned_list) %>% 
+  st_make_valid()
+
+#make id column, get year
+all_fields <- all_fields_binded%>% 
+  st_make_valid() %>% 
+  rownames_to_column(var="ID") %>% 
+  mutate(year = lubridate::year(dt_act)) %>% 
+  dplyr::select(-dt_act)
+```
+
+# Extract average Storie Index values per permitsiteID
+
+```{r}
+#extract storie index value per each year
+all_fields_indexed <- raster::extract(soil_ras, all_fields, fun = mean)
+
+#bind to shapefiles
+all_fields_with_index <- cbind(all_fields, all_fields_indexed) %>% 
+  rename(interphr_score = all_fields_indexed)
+```
+
