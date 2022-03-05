@@ -12,6 +12,7 @@ library(tidyverse) #for data wrangling
 library(here) #for file paths
 library(raster) #for rasters
 library(fasterize) #for making rasters
+library(janitor) #for cleaning names
 ```
 
 # Read in Soil data and Rasterize It
@@ -24,19 +25,25 @@ soil_sf <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil.gpkg")) %
   st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
 
 
-soil_sf_classed <- soil_sf %>% 
-  mutate(interpllc_class = case_when(
-    str_detect(interpllc, "Grade 1") ~ 1,
-    str_detect(interpllc, "Grade 2") ~ 2,
-    str_detect(interpllc, "Grade 3") ~ 3,
-    str_detect(interpllc, "Grade 4") ~ 4,
-    str_detect(interpllc, "Grade 5") ~ 5,
-    str_detect(interpllc, "Grade 6") ~ 6,
-    str_detect(interpllc, "Not") ~ NA,
-    T ~ interpllc
-  ))
+#write function to change categorical cols into numeric for rasterization
+class_cols <- function(colname) {
+  case_when(
+      str_detect(colname, "Grade 1") ~ 1,
+      str_detect(colname, "Grade 2") ~ 2,
+      str_detect(colname, "Grade 3") ~ 3,
+      str_detect(colname, "Grade 4") ~ 4,
+      str_detect(colname, "Grade 5") ~ 5,
+      str_detect(colname, "Grade 6") ~ 6
+  )
+}
 
-unique(soil_sf$interpllc)
+#reclassign categorical variables
+soil_sf_classed <- soil_sf %>% 
+  mutate(interpllc_classed = class_cols(interpllc)) %>% 
+  mutate(interplrc_classed = class_cols(interplrc)) %>% 
+  mutate(interphrc_classed = class_cols(interphrc)) %>% 
+  mutate(interphhc_classed = class_cols(interphhc))
+
 
 # Initialize empty raster
 ras = raster()
@@ -56,21 +63,25 @@ interphr = fasterize(soil_sf, ras, field = "interphr")
 interphh = fasterize(soil_sf, ras, field = "interphh")
 
 #classed values
-interpllc = fasterize(soil_sf, ras, field = "interpllc")
-interplrc = fasterize(soil_sf, ras, field = "interplrc")
-interphrc = fasterize(soil_sf, ras, field = "interphrc")
-interphhc = fasterize(soil_sf, ras, field = "interphhc")
+interpllc = fasterize(soil_sf_classed, ras, field = "interpllc_classed")
+interplrc = fasterize(soil_sf_classed, ras, field = "interplrc_classed")
+interphrc = fasterize(soil_sf_classed, ras, field = "interphrc_classed")
+interphhc = fasterize(soil_sf_classed, ras, field = "interphhc_classed")
+
+#create list of all rasters
+rasters <- c(interpl, interplRV, interphr, interphh, interpllc, interplrc, interphrc, interphhc)
 
 #create raster stack
+soil_ras <- stack(rasters)
 
+soil_ras_test <- c(interpllc, interpl) %>% 
+  stack()
 
 # Define the CRS again
 crs(soil_ras) = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
 
-#plot it (to check it worked)
-plot(soil_ras)
+crs_raster <- crs(soil_ras)
 
-#looks good!
 ```
 
 # Read in and process field data
@@ -119,17 +130,48 @@ all_fields <- all_fields_binded%>%
   st_make_valid() %>% 
   rownames_to_column(var="ID") %>% 
   mutate(year = lubridate::year(dt_act)) %>% 
-  dplyr::select(-dt_act)
+  dplyr::select(-dt_act) %>% 
+  st_transform(crs = crs_raster)
+
+
+#recast as multipolygon
+all_fields <- st_cast(all_fields, "MULTIPOLYGON")
+
+st_is_valid(all_fields, reason = T)
+
+#convert to spatial
+all_fields_sp <- as(all_fields, "Spatial")
 ```
 
 # Extract average Storie Index values per permitsiteID
 
 ```{r}
 #extract storie index value per each year
-all_fields_indexed <- raster::extract(soil_ras, all_fields, fun = mean)
+all_fields_soil <- raster::extract(soil_ras, #Storie Index Raster Stack
+                           all_fields, #Extract based on Kern Ag polygon outlines
+                           fun = mean, #Find the mean value of raster cells that overlap with each polygon
+                           small = TRUE, #Include mean values for small polygons
+                           weights = TRUE, #Add weights for weighted means
+                           normalizeWeights = TRUE,
+                           na.rm = TRUE, #Ignore NAs when calculating mean values BUT then need to change 0s back to NAs
+                           df = TRUE #save as a df
+                           )
 
-#bind to shapefiles
-all_fields_with_index <- cbind(all_fields, all_fields_indexed) %>% 
-  rename(interphr_score = all_fields_indexed)
+
+#change '0' values to NA
+all_fields_soil[all_fields_soil == 0] <- NA
+
+#how many NAs in each column?
+colSums(is.na(all_fields_soil))
+
+#replace names
+names(all_fields_soil) <- c("ID", "interpl", "interplRV", "interphr", "interphh", "interpllc", "interplrc", "interphrc", "interphhc")
+
+#bind to ag shapefile
+fields_storie <- cbind(all_fields, all_fields_soil)
+
+#write to csv
+write.csv(fields_storie, here("data", "shapefiles_written", "fields_with_storie_indexes_05MAR22.csv"), row.names = FALSE)
 ```
+
 
