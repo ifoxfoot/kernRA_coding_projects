@@ -43,10 +43,21 @@ soil_quality_factX <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soi
 
 ```{r}
 #get protected areas within 100m of farms
-easements_kern <- st_intersection(easements, kern_county)
-holdings_kern <- st_intersection(protected_areas_holdings, kern_county)
-superunits_kern <- st_intersection(protected_areas_superunits, kern_county)
-units_kern <- st_intersection(protected_areas_units, kern_county)
+
+#buffer farms to 100m
+farms_buffered <- st_buffer(farms, dist = 100)
+
+easements_kern <- easements %>% 
+  filter(st_intersects(geometry, farms_buffered, sparse = FALSE))
+
+holdings_kern <- protected_areas_holdings %>% 
+  filter(st_intersects(geometry, farms_buffered, sparse = FALSE))
+  
+superunits_kern <- protected_areas_superunits %>% 
+  filter(st_intersects(geometry, farms_buffered, sparse = FALSE))
+
+units_kern <- protected_areas_units %>% 
+  filter(st_intersects(geometry, farms_buffered, sparse = FALSE))
 
 #get gap status 1, 2, 3, or pre 1950s conservation areas
 #also make col names consistent
@@ -59,13 +70,13 @@ long_easements <- easements_kern %>%
          "agncy_name" = esmthldr,
          "yr_est" =  year_est,
          type = "easement") %>% 
-  select(type, unit_id, unit_name, agncy_name, yr_est, gap1_acres, gap2_acres, gap3_acres, gap4_acres)
+  dplyr::select(type, unit_id, unit_name, agncy_name, yr_est, gap1_acres, gap2_acres, gap3_acres, gap4_acres)
 
 long_holdings <- holdings_kern %>% 
   filter(GAP1_acres > 0 | GAP2_acres > 0 | GAP3_acres > 0 | YR_EST %in% c(1:1950)) %>% 
   clean_names() %>%
   mutate(type = "holding") %>% 
-  select(type, unit_id, unit_name, agncy_name, yr_est, gap1_acres, gap2_acres, gap3_acres, gap4_acres)
+  dplyr::select(type, unit_id, unit_name, agncy_name, yr_est, gap1_acres, gap2_acres, gap3_acres, gap4_acres)
 
 long_superunits <- superunits_kern %>% 
   filter(GAP1_acres > 0 | GAP2_acres > 0 | GAP3_acres > 0 | YR_EST %in% c(1:1950)) %>% 
@@ -74,18 +85,29 @@ long_superunits <- superunits_kern %>%
          "unit_name" =  park_name,
          "agncy_name" = mng_agency,
          type = "superunit") %>% 
-  select(type, unit_id, unit_name, agncy_name, yr_est, gap1_acres, gap2_acres, gap3_acres, gap4_acres)
+  dplyr::select(type, unit_id, unit_name, agncy_name, yr_est, gap1_acres, gap2_acres, gap3_acres, gap4_acres)
   
 long_units <- units_kern %>% 
   filter(GAP1_acres > 0 | GAP2_acres > 0 | GAP3_acres > 0 | YR_EST %in% c(1:1950))  %>% 
   clean_names() %>%
   mutate(type = "unit") %>% 
-  select(type, unit_id, unit_name, agncy_name, yr_est, gap1_acres, gap2_acres, gap3_acres, gap4_acres)
+  dplyr::select(type, unit_id, unit_name, agncy_name, yr_est, gap1_acres, gap2_acres, gap3_acres, gap4_acres)
 
-#bind together
-kern_conservation_areas <- rbind(long_easements, long_holdings, long_superunits, long_units)
+#bind together #not including units because they are super big
+kern_conservation_areas <- rbind(long_easements, long_holdings)#, long_superunits, long_units)
 
 plot(st_geometry(kern_conservation_areas))
+
+
+#mutate to include column with gap status #fix this for case when multiple gap status exist
+kern_conservation_GAP <- kern_conservation_areas %>% 
+  mutate(gap = case_when(gap1_acres > 0 ~ "Gap 1",
+                         gap2_acres > 0 ~ "Gap 2",
+                         gap3_acres > 0 ~ "Gap 3"))
+
+plot(kern_conservation_GAP["gap"])
+
+
 ```
 
 ```{r}
@@ -93,13 +115,6 @@ plot(st_geometry(kern_conservation_areas))
 
 ```
 
-```{r}
-#buffer farms to 100m
-farms_buffered <- st_buffer(farms, dist = 100)
-
-#view it
-plot(st_geometry(farms_buffered))
-```
 
 ```{r}
 # #map it

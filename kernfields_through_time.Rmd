@@ -31,7 +31,7 @@ library(smoothr) #drops slivers
 
 # Read in field data and wrangle it
 
-In this section we read in the soil data and wrangle it such that the end product is a single dataframe containing shapefiles for fields in all years. We also need to add a unique ID column and a year column. 
+In this section we read in the field data and wrangle it such that the end product is a single dataframe containing shapefiles for fields in all years. We also need to add a unique ID column and a year column. 
 
 ```{r field_data_wrangling}
 #read in kern data
@@ -79,61 +79,27 @@ all_fields <- all_fields_binded%>%
   mutate(year = lubridate::year(dt_act)) %>% 
   dplyr::select(-dt_act)
 
-#recast as multipolygon
-all_fields <- st_cast(all_fields, "MULTIPOLYGON")
+#make group ID based on geometry. About half of geometry is redundant
+all_fields_grouped <- all_fields %>% 
+  mutate(group = match(geometry, unique(geometry)))
 
-#convert to spatial
-all_fields_sp <- as(all_fields, "Spatial")
-```
+#aggregate based on group
+all_feilds_agg <- all_fields_grouped %>% 
+  dplyr::select(group, geometry) %>% 
+  group_by(group) %>% 
+  summarise(geometry = st_union(geometry))
 
-```{r}
-
-#use the stamp function to assess space-time change
-stamp_test <- stamp.multichange(all_fields_sp, changeByField = T, changeField = "year", dc = 0, distance = F, direction = F)
-
-#drop geometry "crumbs"
-#stamp_test_crumbs <- drop_crumbs(stamp_test, threshold = 1, drop_empty = T)
-
-#convert back to sf
-stamp_test_sf <- st_as_sf(stamp_test) %>% 
+all_feilds_agg <- all_feilds_agg %>% 
+  st_as_sf() %>% 
   st_make_valid()
 
-#write shapefile
-st_write(stamp_test_sf, here("data", "shapefiles_written", "stamp_test_all_fields"), driver = "ESRI Shapefile")
-```
+st_write(all_feilds_agg, here("data", "shapefiles_written", "fields_gr_by_geom.shp"), driver = "ESRI Shapefile")
 
-```{r}
-#clean names, make sure each polygon has same number of rows
+# #recast as multipolygon
+# all_fields <- st_cast(all_fields, "MULTIPOLYGON")
 
-kern_16_clean <- kernfields_2016 %>% 
-  clean_names() %>% 
-  mutate(symbol = NA) %>% 
-  mutate(comm_code = NA) %>% 
-  mutate(year = 2016)
-
-kern_17_clean <- kernfields_2017 %>% 
-  clean_names() %>% 
-  mutate(year = 2017)
-
-kern_18_clean <- kernfields_2018 %>% 
-  clean_names() %>% 
-  mutate(year = 2018)
-
-kern_19_clean <- kernfields_2019 %>% 
-  clean_names()  %>% 
-  mutate(year = 2019)
-
-
-#bind all rows,dissolve (union) boundaries
-kern_binded <- rbind(kern_16_clean, kern_17_clean, kern_18_clean, kern_19_clean) %>% 
-  st_union()
-
-#plot
-plot(st_geometry(kern_binded))
-
-#write to sf
-#st_write(kern_binded, here("data", "shapefiles_written", "unioned_fields_20162019"), driver = "ESRI Shapefile")
-
+# #convert to spatial
+# all_fields_sp <- as(all_fields, "Spatial")
 ```
 
 ```{r}
@@ -179,56 +145,6 @@ tm_shape(kern_19_crop) +
   tm_polygons("pmt_site", legend.show = FALSE)
 ```
 
-```{r}
-
-plot(st_geometry(kern_19_crop), main = "2019")
-plot(st_geometry(kern_18_crop), main = "2018")
-plot(st_geometry(kern_1819_sf), main = "Intersect")
-```
-
-```{r}
-library(stampr)
-library(sp)
-library(smoothr)
-
-#rbind inputs, create ID column
-croped_fields_binded <- rbind(kern_18_crop, kern_19_crop) %>% 
-  st_make_valid() %>% 
-  rownames_to_column(var="ID")
-
-#conver to spatial
-cropped_sp <- as(croped_fields_binded, "Spatial")
-
-#use the stamp function to assess space-time change
-stamp_test <- stamp.multichange(cropped_sp, changeByField = T, changeField = "year", dc = 0, distance = F, direction = F)
-
-#drop geometry "crumbs"
-#stamp_test_crumbs <- drop_crumbs(stamp_test, threshold = 1, drop_empty = T)
-
-#convert back to sf
-stamp_test_sf <- st_as_sf(stamp_test) %>% 
-  st_make_valid()
-
-head(stamp_test_sf)
-
-#task is somewhat computationally intensive...write to shapefile after
-
-#st_write(stamp_test_sf, here("data", "shapefiles_written", "stamp_test.shp"), driver = "ESRI Shapefile")
-```
-
-```{r}
-#THIS APPEARS TO WORK...NEED TO DROP CRUMBS
-plot(st_geometry(kern_19_crop), main = "2019")
-plot(st_geometry(kern_18_crop), main = "2018")
-plot(st_geometry(stamp_test_sf), main = "Stamp_test")
-
-library(tmap)
-
-tmap_mode("view")
-
-tm_shape(stamp_test_sf) +
-tm_polygons("GROUP")
-```
 
 STAMP interp
 
