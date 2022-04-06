@@ -25,6 +25,7 @@ library(janitor) #for cleaning names
 library(stampr) #for space time analysis
 library(sp) #spatial polygons, required for stampr to work
 library(smoothr) #drops slivers
+library(nngeo) #for removing geometry holes
 ```
 
 # Introduction
@@ -38,7 +39,7 @@ In this section we read in the field data and wrangle it such that the end produ
 #must have the following file path in working directory: data/kernfields/kernYEAR.shp
 
 #create list of years
-kern_field_years <- c(2005:2019)
+kern_field_years <- c(2005:2021)
 
 #loop through read-in process
 for (i in kern_field_years) {
@@ -48,20 +49,20 @@ for (i in kern_field_years) {
 }
 
 #loop through listed sf objects and tidy
-fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2019)), 
+fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2021)), 
                  function(x) 
                    {
                    
                    clean_names(x) %>%
                      st_make_valid() %>% 
-                     st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
+                     st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>%
                      dplyr::select(permit,
-                                   permittee,
+                                   #permittee,
                                    pmt_site,
-                                   comm,
+                                   #comm,
                                    s_status,
                                    p_status,
-                                   acres,
+                                   #acres,
                                    dt_act)
                    
                      }
@@ -77,98 +78,82 @@ all_fields <- all_fields_binded%>%
   st_make_valid() %>% 
   rownames_to_column(var="ID") %>% 
   mutate(year = lubridate::year(dt_act)) %>% 
-  dplyr::select(-dt_act)
+  dplyr::select(-dt_act) %>% 
+  mutate(pmt_site_year = str_c(year, "_", pmt_site))
 
 #make group ID based on geometry. About half of geometry is redundant
 all_fields_grouped <- all_fields %>% 
   mutate(group = match(geometry, unique(geometry)))
 
 #aggregate based on group
-all_feilds_agg <- all_fields_grouped %>% 
-  dplyr::select(group, geometry) %>% 
-  group_by(group) %>% 
-  summarise(geometry = st_union(geometry))
+all_feilds_comb <- st_combine(all_fields_grouped)
 
-all_feilds_agg <- all_feilds_agg %>% 
-  st_as_sf() %>% 
+#will need to merge site ID to geometeries
+
+#will need to write it to shapefile
+#st_write(all_feilds_agg, here("data", "shapefiles_written", "fields_gr_by_geom.shp"), driver = "ESRI Shapefile")
+```
+
+# building a small example
+
+```{r}
+#select region (based off of farmer)
+kern_subset <- kernfields_2019 %>% 
+  filter(AGENT == "McMANUS/WILSON,MICHELE/AARIN")
+
+#crop several other years
+kern_19_crop <- st_crop(kernfields_2019, kern_subset)
+
+kern_18_crop <- st_crop(kernfields_2018, kern_subset)
+
+kern_17_crop <- st_crop(kernfields_2018, kern_subset)
+
+#bind together
+sample_bind <- rbind(kern_17_crop, kern_18_crop, kern_19_crop) %>% 
+  st_make_valid() %>% 
+  clean_names() %>%
+  mutate(year = lubridate::year(dt_act))
+
+#clean up columns  
+sample_clean <- sample_bind %>% 
+  mutate(pmt_site_year = str_c(year, "_", pmt_site)) %>% 
+  dplyr::select(pmt_site_year)
+
+#combine geometries
+sample_comb <- sample_clean %>%
+  summarise(geometry = st_combine(geometry)) %>%
+  st_cast("POLYGON")
+
+#add ID data back to geometry
+sample_join <- st_join(sample_comb, sample_clean) %>% 
+  distinct() %>% 
   st_make_valid()
 
-st_write(all_feilds_agg, here("data", "shapefiles_written", "fields_gr_by_geom.shp"), driver = "ESRI Shapefile")
-
-# #recast as multipolygon
-# all_fields <- st_cast(all_fields, "MULTIPOLYGON")
-
-# #convert to spatial
-# all_fields_sp <- as(all_fields, "Spatial")
+#creating pivot table
+sample_pivot <- sample_join %>% 
+  separate(pmt_site_year, into = c("year", "pmt_site"), sep = "_") %>% 
+  pivot_wider(names_from = year, values_from = pmt_site) %>% 
+  st_as_sf() %>% 
+  mutate(id = row_number())
 ```
 
 ```{r}
-#crop
-
-#select region (based off of farmer)
-kern_subset <- kern_19_clean %>% 
-  filter(agent == "McMANUS/WILSON,MICHELE/AARIN")
-
-plot(kern_subset["p_status"])
-
-#crop
-kern_19_crop <- st_crop(kern_19_clean, kern_subset)
-
-plot(kern_19_crop["p_status"])
-
-kern_18_crop <- st_crop(kern_18_clean, kern_subset)
-
-kern_county_crop <- st_crop(kern_county, kern_subset)
-
-plot(kern_county_crop["FID"])
+plot(st_geometry(kern_17_crop))
+plot(st_geometry(kern_18_crop))
+plot(st_geometry(kern_19_crop))
+plot(st_geometry(sample_pivot))
 ```
 
 ```{r}
-# Convert to tibble for a dplyr full join on the geometry column.
-kern1819_intersect <- full_join(as_tibble(kern_19_crop), as_tibble(kern_18_crop), by = "geometry")
-
-kern_1819_sf <- st_as_sf(kern1819_intersect)
-
 tmap_mode("view")
-
-tm_shape(kern_1819_sf) +
-  tm_polygons(c("pmt_site.x", "pmt_site.y"), legend.show = FALSE)
+tm_shape(sample_pivot) +
+  tm_polygons(id = "pmt_site")
 ```
 
 ```{r}
-tm_shape(kern_18_crop) +
-  tm_polygons("pmt_site", legend.show = FALSE)
+tmap_mode("view")
+tm_shape(sample_bind) +
+  tm_polygons(id = "pmt_site")+
+  tm_facets(sync = TRUE, by = "year")
+  
 ```
-
-```{r}
-tm_shape(kern_19_crop) +
-  tm_polygons("pmt_site", legend.show = FALSE)
-```
-
-
-STAMP interp
-
-ID1 Polygon ID from T1 polygons; NA if it did not exist,
-ID2 Polygon ID from T2 polygons; NA if it did not exist,
-LEV1 Level 1 STAMP designation,
-LEV2 Level 2 STAMP designation,
-LEV3 Level 3 STAMP designation,
-LEV4 Level 4 STAMP designation,
-GROUP Group ID signifying group membership,
-AREA Polygon area in appropriate areal units,
--- (optional) Additional columns from directional analysis if direction = TRUE,
--- (optional) Additional columns from distance analysis if distance = TRUE,
-
-
-STAMP events are reported at four levels of increasing complexity:
-LEV1 – disappearance (DISA), stable (STBL), and generation (GENA);
-LEV2 – disappearance (DISA), contraction (CONT), stable (STBL), expansion (EXPN), and generation
-(GENR);
-LEV3 – disappearance (DISA), T1 displacement (DISP1), convergence (CONV), concentration (CONC),
-contraction (CONT), stable (STBL), expansion (EXP), fragmentation (FRAG), divergence (DIV), T2 displacement (DISP2), and generation (GENR);
-LEV4 – LEV4 is different from other levels. It is used to identify those groups where union (UNION),
-division (DIVISION), and both union and division (BOTH) events occur. 
-
-
-
-
