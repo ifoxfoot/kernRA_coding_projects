@@ -81,12 +81,26 @@ all_fields <- all_fields_binded%>%
   dplyr::select(-dt_act) %>% 
   mutate(pmt_site_year = str_c(year, "_", pmt_site))
 
-#make group ID based on geometry. About half of geometry is redundant
-all_fields_grouped <- all_fields %>% 
-  mutate(group = match(geometry, unique(geometry)))
+#select just pmt_site_year
+all_fields_single_col <- all_fields %>% 
+  dplyr::select(pmt_site_year)
 
-#aggregate based on group
-all_feilds_comb <- st_combine(all_fields_grouped)
+#combine geometries
+field_comb <- all_fields %>%
+  summarise(geometry = st_combine(geometry)) %>%
+  st_cast()
+
+#add ID data back to geometry, get rid of duplicates
+field_join <- st_join(field_comb, all_fields_single_col) %>% 
+  distinct() %>% 
+  st_make_valid()
+
+#creating pivot table
+sample_pivot <- sample_join %>% 
+  separate(pmt_site_year, into = c("year", "pmt_site"), sep = "_") %>% 
+  pivot_wider(names_from = year, values_from = pmt_site) %>% 
+  st_as_sf() %>% 
+  mutate(id = row_number())
 
 #will need to merge site ID to geometeries
 
@@ -124,7 +138,7 @@ sample_comb <- sample_clean %>%
   summarise(geometry = st_combine(geometry)) %>%
   st_cast("POLYGON")
 
-#add ID data back to geometry
+#add ID data back to geometry, get rid of duplicates
 sample_join <- st_join(sample_comb, sample_clean) %>% 
   distinct() %>% 
   st_make_valid()
