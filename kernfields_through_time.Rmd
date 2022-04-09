@@ -39,7 +39,7 @@ In this section we read in the field data and wrangle it such that the end produ
 #must have the following file path in working directory: data/kernfields/kernYEAR.shp
 
 #create list of years
-kern_field_years <- c(2005:2021)
+kern_field_years <- c(2005:2020)
 
 #loop through read-in process
 for (i in kern_field_years) {
@@ -49,20 +49,20 @@ for (i in kern_field_years) {
 }
 
 #loop through listed sf objects and tidy
-fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2021)), 
+fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2020)), 
                  function(x) 
                    {
                    
                    clean_names(x) %>%
                      st_make_valid() %>% 
                      st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>%
+                     #mutate(township = "T", range = "R") %>% 
                      dplyr::select(permit,
-                                   #permittee,
                                    pmt_site,
-                                   #comm,
+                                   township,
+                                   range,
                                    s_status,
                                    p_status,
-                                   #acres,
                                    dt_act)
                    
                      }
@@ -79,11 +79,43 @@ all_fields <- all_fields_binded%>%
   rownames_to_column(var="ID") %>% 
   mutate(year = lubridate::year(dt_act)) %>% 
   dplyr::select(-dt_act) %>% 
+  mutate(township_range = str_c(township, "_", range)) %>% 
   mutate(pmt_site_year = str_c(year, "_", pmt_site))
 
 #select just pmt_site_year
 all_fields_single_col <- all_fields %>% 
   dplyr::select(pmt_site_year)
+
+#create list of township range values
+townships <- unique(all_fields$township_range)
+
+#create list for resulting dfs
+list_df <- list()
+
+#create loop
+for (i in townships) {
+    df_name <- paste0("kernfields_", i)
+    list_df[[df_name]] <- all_fields[all_fields$township_range == i,]
+}
+
+fields_processed <- lapply(list_df,
+                           function(x) 
+                             {
+                             
+                             dplyr::select(x, pmt_site_year) %>% 
+                               summarise(geometry = st_combine(geometry)) %>%
+                               st_cast("POLYGON")
+                               
+                             st_join(x, all_fields_single_col) %>% 
+                               distinct() %>% 
+                               st_make_valid() %>% 
+                               separate(pmt_site_year, into = c("year", "pmt_site"), sep = "_") %>% 
+                               pivot_wider(names_from = year, values_from = pmt_site) %>% 
+                               st_as_sf() %>% 
+                               mutate(id = row_number())
+                             
+                             })
+
 
 #combine geometries
 field_comb <- all_fields %>%
@@ -102,7 +134,8 @@ sample_pivot <- sample_join %>%
   st_as_sf() %>% 
   mutate(id = row_number())
 
-#will need to merge site ID to geometeries
+#NOTES
+#need to add in 2021 (which has different col names)
 
 #will need to write it to shapefile
 #st_write(all_feilds_agg, here("data", "shapefiles_written", "fields_gr_by_geom.shp"), driver = "ESRI Shapefile")
