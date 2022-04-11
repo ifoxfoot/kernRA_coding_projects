@@ -32,7 +32,7 @@ library(nngeo) #for removing geometry holes
 
 # Read in field data and wrangle it
 
-In this section we read in the field data and wrangle it such that the end product is a single dataframe containing shapefiles for fields in all years. We also need to add a unique ID column and a year column. 
+In this section read in the field data and wrangle it such that the end product is a single SF object where each row is a field and the columns are for geometry and for permitsite ID and year, which are merged to single string.
 
 ```{r field_data_wrangling}
 #read in kern data
@@ -84,123 +84,45 @@ all_fields <- all_fields_binded%>%
 
 #select just pmt_site_year
 all_fields_single_col <- all_fields %>% 
-  dplyr::select(pmt_site_year)
-
-#create list of township range values
-townships <- unique(all_fields$township_range)
-
-#create list for resulting dfs
-list_df <- list()
-
-#create loop
-for (i in townships) {
-    df_name <- paste0("kernfields_", i)
-    list_df[[df_name]] <- all_fields[all_fields$township_range == i,]
-}
-
-fields_processed <- lapply(list_df,
-                           function(x) 
-                             {
-                             
-                             dplyr::select(x, pmt_site_year) %>% 
-                               summarise(geometry = st_combine(geometry)) %>%
-                               st_cast("POLYGON")
-                               
-                             st_join(x, all_fields_single_col) %>% 
-                               distinct() %>% 
-                               st_make_valid() %>% 
-                               separate(pmt_site_year, into = c("year", "pmt_site"), sep = "_") %>% 
-                               pivot_wider(names_from = year, values_from = pmt_site) %>% 
-                               st_as_sf() %>% 
-                               mutate(id = row_number())
-                             
-                             })
+  dplyr::select(pmt_site_year) %>% 
+  st_make_valid() %>% 
+  st_buffer(dist = 0)
 
 
-#combine geometries
-field_comb <- all_fields %>%
-  summarise(geometry = st_combine(geometry)) %>%
-  st_cast()
+#write to shapefile
+#st_write(all_fields_single_col, "data/shapefiles_written/2005-2020kernfields.shp")
 
-#add ID data back to geometry, get rid of duplicates
-field_join <- st_join(field_comb, all_fields_single_col) %>% 
-  distinct() %>% 
-  st_make_valid()
-
-#creating pivot table
-sample_pivot <- sample_join %>% 
-  separate(pmt_site_year, into = c("year", "pmt_site"), sep = "_") %>% 
-  pivot_wider(names_from = year, values_from = pmt_site) %>% 
-  st_as_sf() %>% 
-  mutate(id = row_number())
 
 #NOTES
 #need to add in 2021 (which has different col names)
-
-#will need to write it to shapefile
-#st_write(all_feilds_agg, here("data", "shapefiles_written", "fields_gr_by_geom.shp"), driver = "ESRI Shapefile")
+#need crops in final product?
+#when uploaded to mapshaper, click one or both boxes?
 ```
 
-# building a small example
+Take the resulting shapefile `sample_clean.shp` and upload it to mapshaper's online interface (https://mapshaper.org/). Then enter in the command line `$ mosaic` and download results as a shapefile, as seen in the next code chunk.
+
+This thread could potentially improve workflow https://github.com/mbloch/mapshaper/issues/353 
+
+# Using Mapshaper outputs
 
 ```{r}
-#select region (based off of farmer)
-kern_subset <- kernfields_2019 %>% 
-  filter(AGENT == "McMANUS/WILSON,MICHELE/AARIN")
-
-#crop several other years
-kern_19_crop <- st_crop(kernfields_2019, kern_subset)
-
-kern_18_crop <- st_crop(kernfields_2018, kern_subset)
-
-kern_17_crop <- st_crop(kernfields_2018, kern_subset)
-
-#bind together
-sample_bind <- rbind(kern_17_crop, kern_18_crop, kern_19_crop) %>% 
+#read in data from mapshaper outputs
+mosiac <- st_read("data/mapshaper_outputs/2005-2020kernfields/2005-2020kernfields.shp") %>% 
   st_make_valid() %>% 
-  clean_names() %>%
-  mutate(year = lubridate::year(dt_act))
+  st_transform(crs = st_crs(all_fields_single_col))
 
-#clean up columns  
-sample_clean <- sample_bind %>% 
-  mutate(pmt_site_year = str_c(year, "_", pmt_site)) %>% 
-  dplyr::select(pmt_site_year)
+#negative buffer and intersect with field data
+sample_join <- st_intersection(st_buffer(mosiac, dist = -1), all_fields_single_col)
 
-#combine geometries
-sample_comb <- sample_clean %>%
-  summarise(geometry = st_combine(geometry)) %>%
-  st_cast("POLYGON")
-
-#add ID data back to geometry, get rid of duplicates
-sample_join <- st_join(sample_comb, sample_clean) %>% 
-  distinct() %>% 
-  st_make_valid()
-
-#creating pivot table
+#pivot so each column is a year
 sample_pivot <- sample_join %>% 
   separate(pmt_site_year, into = c("year", "pmt_site"), sep = "_") %>% 
-  pivot_wider(names_from = year, values_from = pmt_site) %>% 
-  st_as_sf() %>% 
-  mutate(id = row_number())
-```
+  select(-FID) %>% 
+  pivot_wider(names_from = year, values_from = pmt_site) %>%
+  st_sf() %>% 
+  st_buffer(dist = 0) %>% 
+  st_make_valid()
 
-```{r}
-plot(st_geometry(kern_17_crop))
-plot(st_geometry(kern_18_crop))
-plot(st_geometry(kern_19_crop))
-plot(st_geometry(sample_pivot))
-```
-
-```{r}
-tmap_mode("view")
-tm_shape(sample_pivot) +
-  tm_polygons(id = "pmt_site")
-```
-
-```{r}
-tmap_mode("view")
-tm_shape(sample_bind) +
-  tm_polygons(id = "pmt_site")+
-  tm_facets(sync = TRUE, by = "year")
-  
+#write to csv
+write_csv(sample_pivot, "data/shapefiles_written/2005-2020_pivoted.csv")
 ```

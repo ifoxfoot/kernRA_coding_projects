@@ -64,14 +64,16 @@ sample_clean <- sample_bind %>%
 
 I took the shapefile `sample_clean.shp` and uploaded it to mapshaper's online interface (https://mapshaper.org/). Then I entered in the command line `$ mosaic` and downloaded results as a shapefile, as seen in the next code chunk.
 
-This thread could potentailly improve workflor https://github.com/mbloch/mapshaper/issues/353 
+This thread could potentially improve workflow https://github.com/mbloch/mapshaper/issues/353 
 
 ```{r}
-#this workflow appears to work
+#read in mapshaper output
 sample_mosiac <- st_read("data/mapshaper_outputs/sample_clean/sample_clean.shp")
 
+#intersect with field data
 sample_join <- st_intersection(st_buffer(sample_mosiac, dist = -1), sample_clean)
 
+#pivot so each column is a year
 sample_pivot <- sample_join %>% 
   separate(pmt_site_year, into = c("year", "pmt_site"), sep = "_") %>% 
   select(-FID) %>% 
@@ -80,13 +82,14 @@ sample_pivot <- sample_join %>%
   st_buffer(dist = 0) %>% 
   st_make_valid()
 
-#wrire to csv to preserve listed attributes
+#write to csv to preserve listed attributes
 write_csv(sample_pivot, "data/shapefiles_written/2005-2020_pivoted.csv")
 ```
 
 # PMT_SITE Pivot Table
 
 ```{r}
+#test output
 tmap_mode("view")
 
 tm_shape(sample_pivot) +
@@ -97,6 +100,7 @@ tm_shape(sample_pivot) +
 # Original Data
 
 ```{r}
+#reference what output should be
 tmap_mode("view")
 
 tm_shape(sample_bind) +
