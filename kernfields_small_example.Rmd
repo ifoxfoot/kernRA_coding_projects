@@ -62,7 +62,7 @@ sample_clean <- sample_bind %>%
 #st_write(sample_clean, here("data", "shapefiles_written", "sample_clean.shp"))
 ```
 
-I took the shapefile `sample_clean.shp` and uploaded it to mapshaper's online interface (https://mapshaper.org/). Then I entered in the command line `$ mosaic` and downloaded results as a shapefile, as seen in the next code chunk.
+I took the shapefile `sample_clean.shp` and uploaded it to mapshaper's online interface (https://mapshaper.org/). Then I entered in the console `$ mosaic` and downloaded results as a shapefile, as seen in the next code chunk.
 
 This thread could potentially improve workflow https://github.com/mbloch/mapshaper/issues/353 
 
@@ -82,8 +82,12 @@ sample_pivot <- sample_join %>%
   st_buffer(dist = 0) %>% 
   st_make_valid()
 
-#write to csv to preserve listed attributes
-write_csv(sample_pivot, "data/shapefiles_written/2005-2020_pivoted.csv")
+#write as character because you can't write lists to csv
+sample_pivot2 = data.frame(lapply(sample_pivot, as.character), stringsAsFactors=FALSE)
+
+
+#write to csv
+write_csv(sample_pivot2, "data/shapefiles_written/2017_2019_sample.csv")
 ```
 
 # PMT_SITE Pivot Table
@@ -107,5 +111,6 @@ tm_shape(sample_bind) +
   tm_polygons(id = "pmt_site") +
   tm_facets(by = "year")
 ```
+
 
 
