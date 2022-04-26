@@ -13,11 +13,18 @@ library(tidyverse)
 library(janitor)
 ```
 
+# Read in and Process Kern Field Data
+
+```{r}
+#set up project crs
+proj_crs = crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+```
+
 ```{r}
 #read in kernfields
 
 #create list of years
-kern_field_years <- c(2005:2020)
+kern_field_years <- c(2011:2017)
 
 #loop through read-in process
 for (i in kern_field_years) {
@@ -27,14 +34,13 @@ for (i in kern_field_years) {
 }
 
 #loop through listed sf objects and tidy
-fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2020)), 
+fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2011:2017)), 
                  function(x) 
                    {
                    
                    clean_names(x) %>%
                      st_make_valid() %>% 
-                     st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>%
-                     #mutate(township = "T", range = "R") %>% 
+                     st_transform(crs = proj_crs) %>%
                      dplyr::select(permit,
                                    pmt_site,
                                    township,
@@ -52,41 +58,76 @@ all_fields_binded <- do.call(rbind, fields_cleaned_list) %>%
   st_make_valid()
 ```
 
+# Read in and Process Historical Landuse Data
+
+Historical landuse data for years 1885, 1912, 1945, 1977, and 2004. Link to databasin page:https://databasin.org/galleries/7a6eb74f387047b4a22d563be0bc494f/   
+
 ```{r}
 #read in kern county shapefile for clipping
-kern_county <- read_sf("data/Kern_County_Boundary/Kern_County_Boundary.shp")
+kern_county <- read_sf("data/Kern_County_Boundary/Kern_County_Boundary.shp") %>% 
+  st_transform(crs = proj_crs)
+
+#read in sjv historical landuse data
+sjv_historical_landuse <- read_sf("data/esrp_histlu/histlu200408.shp") %>% 
+  st_transform(crs = proj_crs)
+
+#clip historical landuse data to kern county
+historical_landuse_kern <- st_crop(sjv_historical_landuse, kern_county)
+
+#select only values that were irrigated at some point
+hist_irrigated <- historical_landuse_kern %>% 
+  filter_all(any_vars(. %in% c("Irrigated")))
 ```
 
+# Read in and Process FAM Data
+
+FAM data has been reprojected, clipped to kern county, and polygonized in QGIS.
+
 ```{r}
-#read in FAM data
+#loop through read-in process
+for (i in kern_field_years) {
+  filename_FAM <- paste0("FAM_", i)
+  wd_FAM <- paste0("data/FAM_TIF/FAM_processed/FAM_clipped_", i, ".gpkg")
+  assign(filename_FAM, read_sf(wd_FAM))
+}
 
-#gather file data
-my_files <- list.files("data/FAM_TIF", full.names = TRUE)
+#loop through listed sf objects and tidy
+FAM_cleaned_list <- lapply(mget(sprintf("FAM_%d", 2011:2017)), 
+                 function(x) 
+                   {
+                   
+                   clean_names(x) %>%
+                     st_make_valid() %>% 
+                     st_transform(crs = proj_crs) %>% 
+                     mutate(year = year)
+                   
+                     }
+                 )
 
-#this reads in the data as a raster stack
-FAM_raster_stack <- raster::stack(my_files)
+#bind FAM data together, include new column saying what year it came from
+FAM_binded <- do.call(rbind, lapply(names(FAM_cleaned_list), 
+                                    function(x) 
+                                      cbind(FAM_cleaned_list[[x]], 
+                                            source = x)
+                                    ))
 
-#save crs of FAM rasters
-FAM_raster_stack_crs <- crs(FAM_raster_stack)
+```
 
-FAM_raster_stack_crs
+# Decide when FAM can be considered fallowed
 
-#transform kern county SF object to be same as FAM rasters
-kern_county_transformed <- kern_county %>% 
-  st_transform(crs = FAM_raster_stack_crs)
+FAM data can be considered fallowed when 
+* 1. It is not associated with a permit_site_ID from the kernfield data for the same year
+* 2. Historical data shows that it was previously irrigated land
 
-st_crs(kern_county_transformed)
+```{r}
+#select fam fields that meet the criteria
+fallowed_FAM <- FAM_binded %>% 
+  filter(fallowed == 3) %>% 
+  mutate(id = row_number() )#select fallowed fields (needs double checking!!)
 
-#reproject FAM raster
-reproj_FAM <- projectRaster(FAM_raster_stack, crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs")
+fallowed_irrigated_FAM <- filter(id %in% unlist(st_intersects(fallowed_FAM, hist_irrigated)))
 
-#crop and mask
-FAM_raster_crop <- crop(FAM_raster_stack, extent(kern_county_transformed))
-FAM_raster_mask <- mask(FAM_raster_crop, kern_county_transformed)
-
-plot(FAM_raster_mask)
-
-#polygonize masked FAM rasters
-polylist = lapply(as.list(FAM_raster_mask), rasterToPolygons)
+plot(st_geometry(fallowed_FAM))
+plot(st_geometry(fallowed_irrigated_FAM))
 ```
 
