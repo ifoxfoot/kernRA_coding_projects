@@ -24,7 +24,7 @@ proj_crs = crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y
 #read in kernfields
 
 #create list of years
-kern_field_years <- c(2011:2017)
+kern_field_years <- c(2005:2020)
 
 #loop through read-in process
 for (i in kern_field_years) {
@@ -34,7 +34,7 @@ for (i in kern_field_years) {
 }
 
 #loop through listed sf objects and tidy
-fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2011:2017)), 
+fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2020)), 
                  function(x) 
                    {
                    
@@ -55,7 +55,8 @@ fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2011:2017)),
 
 #rbind inputs
 all_fields_binded <- do.call(rbind, fields_cleaned_list) %>% 
-  st_make_valid()
+  st_make_valid() %>% 
+  mutate(year = lubridate::year(dt_act))
 ```
 
 # Read in and Process Historical Landuse Data
@@ -120,14 +121,23 @@ FAM data can be considered fallowed when
 * 2. Historical data shows that it was previously irrigated land
 
 ```{r}
-#select fam fields that meet the criteria
+#2011 example
+
+#select FAM fields that are fallowed, add row number
 fallowed_FAM <- FAM_binded %>% 
-  filter(fallowed == 3) %>% 
-  mutate(id = row_number() )#select fallowed fields (needs double checking!!)
+  filter(fallowed == 3)
 
-fallowed_irrigated_FAM <- filter(id %in% unlist(st_intersects(fallowed_FAM, hist_irrigated)))
+#select FAM fallowed that were irrigated
+fallowed_irrigated_FAM <- st_filter(fallowed_FAM, hist_irrigated, .predicate = st_intersects)
 
-plot(st_geometry(fallowed_FAM))
-plot(st_geometry(fallowed_irrigated_FAM))
+#select pmts from 2011
+pmt_2011 <- all_fields_binded %>% 
+  filter(year <= 2011)
+
+#select FAM that does not have permit_site_id for 2011
+true_fallowed_FAM <- fallowed_irrigated_FAM[!lengths(st_intersects(fallowed_irrigated_FAM, pmt_2011)), ]
+
+#write to shapefile
+st_write(true_fallowed_FAM, "data/shapefiles_written/2011_true_fam.shp", append = F)
 ```
 
