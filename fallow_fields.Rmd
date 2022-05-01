@@ -24,7 +24,7 @@ proj_crs = crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y
 #read in kernfields
 
 #create list of years
-kern_field_years <- c(2005:2020)
+kern_field_years <- c(1997:2020)
 
 #loop through read-in process
 for (i in kern_field_years) {
@@ -34,7 +34,7 @@ for (i in kern_field_years) {
 }
 
 #loop through listed sf objects and tidy
-fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2020)), 
+fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 1997:2020)), 
                  function(x) 
                    {
                    
@@ -43,8 +43,8 @@ fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2020)),
                      st_transform(crs = proj_crs) %>%
                      dplyr::select(permit,
                                    pmt_site,
-                                   township,
-                                   range,
+                                   #township,
+                                   #range,
                                    s_status,
                                    p_status,
                                    dt_act)
@@ -85,8 +85,11 @@ hist_irrigated <- historical_landuse_kern %>%
 FAM data has been reprojected, clipped to kern county, and polygonized in QGIS.
 
 ```{r}
+#create list of years for FAM
+FAM_years <- c(2011:2017)
+
 #loop through read-in process
-for (i in kern_field_years) {
+for (i in FAM_years) {
   filename_FAM <- paste0("FAM_", i)
   wd_FAM <- paste0("data/FAM_TIF/FAM_processed/FAM_clipped_", i, ".gpkg")
   assign(filename_FAM, read_sf(wd_FAM))
@@ -99,9 +102,7 @@ FAM_cleaned_list <- lapply(mget(sprintf("FAM_%d", 2011:2017)),
                    
                    clean_names(x) %>%
                      st_make_valid() %>% 
-                     st_transform(crs = proj_crs) %>% 
-                     mutate(year = year)
-                   
+                     st_transform(crs = proj_crs)
                      }
                  )
 
@@ -112,6 +113,9 @@ FAM_binded <- do.call(rbind, lapply(names(FAM_cleaned_list),
                                             source = x)
                                     ))
 
+FAM_binded <- FAM_binded %>% 
+  mutate(year = str_remove(source, "FAM_")) %>% 
+  select(-source)
 ```
 
 # Decide when FAM can be considered fallowed
@@ -121,23 +125,32 @@ FAM data can be considered fallowed when
 * 2. Historical data shows that it was previously irrigated land
 
 ```{r}
-#2011 example
-
-#select FAM fields that are fallowed, add row number
-fallowed_FAM <- FAM_binded %>% 
-  filter(fallowed == 3)
-
 #select FAM fallowed that were irrigated
-fallowed_irrigated_FAM <- st_filter(fallowed_FAM, hist_irrigated, .predicate = st_intersects)
+fallowed_irrigated_FAM <- st_filter(FAM_binded, hist_irrigated, .predicate = st_intersects)
 
-#select pmts from 2011
-pmt_2011 <- all_fields_binded %>% 
-  filter(year <= 2011)
+#write function to select only FAM fields that do not intersect with any kernfields in the same year or from previous year (AKA they can intersect with future kernfields)
+true_fallow_function <- function(x) {
+  
+  kernfields_before <- all_fields_binded %>% 
+    filter(year <= x)
+  
+  fam_before <- fallowed_irrigated_FAM %>% 
+    filter(year == x)
+  
+  true_fallowed_output <<- fam_before[!lengths(st_intersects(fam_before, kernfields_before)), ]
+  
+}
 
-#select FAM that does not have permit_site_id for 2011
-true_fallowed_FAM <- fallowed_irrigated_FAM[!lengths(st_intersects(fallowed_irrigated_FAM, pmt_2011)), ]
+#loop through FAM years
+fallow_list <- lapply(FAM_years, true_fallow_function)
+
+#rbind true fallow together
+true_fallow_binded <- do.call(rbind, fallow_list)
+
+#need to filter for correct values
+
 
 #write to shapefile
-st_write(true_fallowed_FAM, "data/shapefiles_written/2011_true_fam.shp", append = F)
+st_write(true_fallow_binded, "data/shapefiles_written/true_fam.shp", append = F)
 ```
 
