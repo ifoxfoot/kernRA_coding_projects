@@ -98,7 +98,7 @@ tmap_mode("view")
 
 tm_shape(sample_bind) +
   tm_polygons(id = "pmt_site") +
-  tm_facets(by = "year") +
+  tm_facets(by = "year", sync = T) +
   tm_layout(panel.labels = c("2016", "2017", "2018", "2019"))
 ```
 
