@@ -79,15 +79,27 @@ sample_pivot <- sample_join %>%
   select(-FID) %>% 
   pivot_wider(names_from = year, values_from = pmt_site) %>%
   st_sf() %>% 
-  st_buffer(dist = 0) %>% 
-  st_make_valid()
+  st_buffer(dist = 1) %>%
+  mutate(area_sq_ft = st_area(.))
 
-#write as character because you can't write lists to csv
-sample_pivot2 = data.frame(lapply(sample_pivot, as.character), stringsAsFactors=FALSE)
-
+#unnest listed pmt_site so they are each in own column
+sample_pivot_sep <- sample_pivot %>% 
+  unnest_wider(c(`2016`, `2017`, `2018`, `2019`), names_sep = "_")
 
 #write to csv
-write_csv(sample_pivot2, "data/shapefiles_written/2017_2019_sample.csv")
+write_csv(sample_pivot_sep, "data/shapefiles_written/2017_2019_sample.csv")
+```
+
+# Original Data
+
+```{r}
+#reference what output should be
+tmap_mode("view")
+
+tm_shape(sample_bind) +
+  tm_polygons(id = "pmt_site") +
+  tm_facets(by = "year") +
+  tm_layout(panel.labels = c("2016", "2017", "2018", "2019"))
 ```
 
 # PMT_SITE Pivot Table
@@ -100,17 +112,3 @@ tm_shape(sample_pivot) +
   tm_polygons(id = "pmt_site_year") +
   tmap_options(check.and.fix = TRUE)
 ```
-
-# Original Data
-
-```{r}
-#reference what output should be
-tmap_mode("view")
-
-tm_shape(sample_bind) +
-  tm_polygons(id = "pmt_site") +
-  tm_facets(by = "year")
-```
-
-
-
