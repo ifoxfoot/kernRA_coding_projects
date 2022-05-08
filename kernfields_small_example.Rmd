@@ -22,7 +22,7 @@ library(janitor) #for cleaning names
 
 ```{r}
 #create list of years
-kern_field_years <- c(2015:2019)
+kern_field_years <- c(2016:2019)
 
 #loop through read-in process
 for (i in kern_field_years) {
@@ -36,22 +36,29 @@ kern_subset <- kernfields_2019 %>%
   filter(AGENT == "McMANUS/WILSON,MICHELE/AARIN")
 
 #crop several other years
-kern_15_crop <- st_crop(kernfields_2015, kern_subset)
+kern_2017_crop <- st_crop(kernfields_2017, kern_subset)
 
-kern_16_crop <- st_crop(kernfields_2016, kern_subset)
+kern_2018_crop <- st_crop(kernfields_2018, kern_subset)
 
-kern_17_crop <- st_crop(kernfields_2017, kern_subset)
+kern_2019_crop <- st_crop(kernfields_2019, kern_subset)
 
-kern_18_crop <- st_crop(kernfields_2018, kern_subset)
+#create list of cropped fields and tidy
+kern_cropped_list <- lapply(mget(sprintf("kern_%d_crop", 2017:2019)), 
+                 function(x) 
+                   {
+                   clean_names(x) %>%
+                     st_make_valid()
+                     }
+                 )
 
-kern_19_crop <- st_crop(kernfields_2019, kern_subset)
-
-#bind together
-sample_bind <- rbind(kern_17_crop, kern_18_crop, kern_19_crop) %>% 
-  st_make_valid() %>% 
-  clean_names() %>%
-  distinct() %>% 
-  mutate(year = lubridate::year(dt_act))
+#bind cropped data together, include new column "source" saying what dataset it came from
+sample_bind <- do.call(rbind, lapply(names(kern_cropped_list), 
+                                    function(x) 
+                                      cbind(kern_cropped_list[[x]], 
+                                            source = x)
+                                    )) %>% 
+  #turn source column into year column by keeping only numbers
+    mutate(year = gsub("\\D", "", source))
 
 #merge permit site and year, then select only pmt_site and year 
 sample_clean <- sample_bind %>% 
@@ -59,7 +66,8 @@ sample_clean <- sample_bind %>%
   dplyr::select(pmt_site_year) %>% 
   st_make_valid()
 
-#st_write(sample_clean, here("data", "shapefiles_written", "sample_clean.shp"))
+#write to shapefile
+st_write(sample_clean, "data/shapefiles_written/sample_clean.shp", append = F)
 ```
 
 I took the shapefile `sample_clean.shp` and uploaded it to mapshaper's online interface (https://mapshaper.org/). Then I entered in the console `$ mosaic` and downloaded results as a shapefile, as seen in the next code chunk.
@@ -84,7 +92,7 @@ sample_pivot <- sample_join %>%
 
 #unnest listed pmt_site so they are each in own column
 sample_pivot_sep <- sample_pivot %>% 
-  unnest_wider(c(`2016`, `2017`, `2018`, `2019`), names_sep = "_")
+  unnest_wider(c(`2017`, `2018`, `2019`), names_sep = "_")
 
 #write to csv
 write_csv(sample_pivot_sep, "data/shapefiles_written/2017_2019_sample.csv")
@@ -99,7 +107,7 @@ tmap_mode("view")
 tm_shape(sample_bind) +
   tm_polygons(id = "pmt_site") +
   tm_facets(by = "year", sync = T) +
-  tm_layout(panel.labels = c("2016", "2017", "2018", "2019"))
+  tm_layout(panel.labels = c("2017", "2018", "2019"))
 ```
 
 # PMT_SITE Pivot Table

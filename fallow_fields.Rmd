@@ -99,7 +99,6 @@ for (i in FAM_years) {
 FAM_cleaned_list <- lapply(mget(sprintf("FAM_%d", 2011:2017)), 
                  function(x) 
                    {
-                   
                    clean_names(x) %>%
                      st_make_valid() %>% 
                      st_transform(crs = proj_crs)
