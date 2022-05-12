@@ -169,9 +169,7 @@ true_fallow_function <- function(x) {
   fam_current <- FAM_binded %>% 
     filter(year == x)
   
-  true_fallowed_output <- st_difference(fam_current, kernfields_current)
-  
-  return(true_fallowed_output)
+    true_fallowed_output <<- fam_current[!lengths(st_intersects(fam_current, kernfields_current)), ]
   
 }
 
@@ -180,8 +178,6 @@ fallow_list <- lapply(FAM_years, true_fallow_function)
 
 #rbind true fallow together
 true_fallow_binded <- do.call(rbind, fallow_list)
-
-
 
 #write to shapefile
 st_write(true_fallow_binded, "data/shapefiles_written/true_fam.shp", append = F)
