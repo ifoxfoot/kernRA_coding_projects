@@ -11,10 +11,13 @@ library(sf)
 library(here)
 library(tidyverse)
 library(janitor)
-library(tmap)
+library(raster)
+library(fasterize)
 ```
 
 This is an exploration of the California Conservation Easement Database (CCED) and California Protected Area Database (CPAD). The goal is to find conservation areas that have never been farmed, which are similar enough to compare to agricultural areas
+
+## Read in All Data
 
 ```{r, read in data}
 #read in cced database
@@ -37,27 +40,35 @@ kern_county <- read_sf(here("data", "Kern_County_Boundary")) %>%
   st_transform(crs = proj_crs)
 
 #read in soil data
-soil_quality <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil.gpkg"))
-soil_quality_factX <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil_factX.gpkg"))
+soil_quality <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil.gpkg")) %>% 
+  st_transform(crs = proj_crs)
+
+soil_quality_factX <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soil_factX.gpkg")) %>% 
+  st_transform(crs = proj_crs)
+
+#read in historical landuse data
+hist_landu <- read_sf(here("data", "esrp_histlu", "histlu200408.shp")) %>% 
+  st_transform(crs = proj_crs) %>% 
+  select(POT_LU, LU1885, LU1912, LU1945, LU1977, LU2004)
 ```
 
+## Narrow Down Conservation Areas
+
+Select only conservation areas within Kern county. Then select conservation areas with a GAP 1, 2, or 3 status OR areas that were established before 1950. 
+
 ```{r}
-#get protected areas within 100m of farms
-
-#buffer farms to 100m
-farms_buffered <- st_buffer(farms, dist = 100)
-
+#get protected areas within kern county
 easements_kern <- easements %>% 
-  filter(st_intersects(geometry, farms_buffered, sparse = FALSE))
+  filter(st_intersects(geometry, kern_county, sparse = FALSE))
 
 holdings_kern <- protected_areas_holdings %>% 
-  filter(st_intersects(geometry, farms_buffered, sparse = FALSE))
+  filter(st_intersects(geometry, kern_county, sparse = FALSE))
   
 superunits_kern <- protected_areas_superunits %>% 
-  filter(st_intersects(geometry, farms_buffered, sparse = FALSE))
+  filter(st_intersects(geometry, kern_county, sparse = FALSE))
 
 units_kern <- protected_areas_units %>% 
-  filter(st_intersects(geometry, farms_buffered, sparse = FALSE))
+  filter(st_intersects(geometry, kern_county, sparse = FALSE))
 
 #get gap status 1, 2, 3, or pre 1950s conservation areas
 #also make col names consistent
@@ -93,11 +104,11 @@ long_units <- units_kern %>%
   mutate(type = "unit") %>% 
   dplyr::select(type, unit_id, unit_name, agncy_name, yr_est, gap1_acres, gap2_acres, gap3_acres, gap4_acres)
 
-#bind together #not including units because they are super big
-kern_conservation_areas <- rbind(long_easements, long_holdings)#, long_superunits, long_units)
+#bind together 
+#not including units/superunits because they are super big aggregations
+kern_conservation_areas <- rbind(long_easements, long_holdings)
 
 plot(st_geometry(kern_conservation_areas))
-
 
 #mutate to include column with gap status #fix this for case when multiple gap status exist
 kern_conservation_GAP <- kern_conservation_areas %>% 
@@ -106,20 +117,102 @@ kern_conservation_GAP <- kern_conservation_areas %>%
                          gap3_acres > 0 ~ "Gap 3"))
 
 plot(kern_conservation_GAP["gap"])
-
-
 ```
+
+## Add Historical Landuse Data
+
+Take the resulting conservation areas and merge it with historical landuse data, so you can see if the conservation area was previously irrigated. 
 
 ```{r}
-#explore soil quality in the conservation area
+#explore historical landuse in the conservation area
+kern_conserve_hist <- st_join(kern_conservation_areas, hist_landu, left = T)
+```
 
+## Add Soil Data
+
+```{r}
+#explore soil quality of conservation areas by joining the two shapefiles
+kern_conserve_soil_joined <- st_join(kern_conserve_hist, soil_quality, left = T)
 ```
 
 
 ```{r}
-# #map it
-# tmap_mode("view")
-# 
-# tm_shape(conservation_areas) +
-#   tm_polygons("unit_name", legend.show = FALSE)
+#explore soil quality by rasterizing soil and calculating average rating in conservation area
+
+#first convert conservation areas with landuse columns to spatial format
+#convert to spatial
+kern_conserve_sp <- as(kern_conserve_hist, "Spatial")
+
+#write function to change categorical cols into numeric for rasterization
+class_cols <- function(colname) {
+  case_when(
+      str_detect(colname, "Grade 1") ~ 1,
+      str_detect(colname, "Grade 2") ~ 2,
+      str_detect(colname, "Grade 3") ~ 3,
+      str_detect(colname, "Grade 4") ~ 4,
+      str_detect(colname, "Grade 5") ~ 5,
+      str_detect(colname, "Grade 6") ~ 6
+  )
+}
+
+#reclassing categorical variables
+soil_sf_classed <- soil_quality %>% 
+  mutate(interpllc_classed = class_cols(interpllc)) %>% 
+  mutate(interplrc_classed = class_cols(interplrc)) %>% 
+  mutate(interphrc_classed = class_cols(interphrc)) %>% 
+  mutate(interphhc_classed = class_cols(interphhc))
+
+
+# Initialize empty raster
+ras = raster()
+
+# Set the raster extent based on the soil shapefile
+extent(ras) = extent(soil_quality)
+
+# Set raster resolution (meters)
+res(ras) = 10
+
+#rasterize (each raster contains one storie index measure)
+
+#continuous values
+interpl = fasterize(soil_quality, ras, field = "interpl")
+interplRV = fasterize(soil_quality, ras, field = "interplRV")
+interphr = fasterize(soil_quality, ras, field = "interphr")
+interphh = fasterize(soil_quality, ras, field = "interphh")
+
+#classed values
+interpllc = fasterize(soil_sf_classed, ras, field = "interpllc_classed")
+interplrc = fasterize(soil_sf_classed, ras, field = "interplrc_classed")
+interphrc = fasterize(soil_sf_classed, ras, field = "interphrc_classed")
+interphhc = fasterize(soil_sf_classed, ras, field = "interphhc_classed")
+
+#create list of all rasters
+rasters <- c(interpl, interplRV, interphr, interphh, interpllc, interplrc, interphrc, interphhc)
+
+#create raster stack
+soil_ras <- stack(rasters)
+
+#project
+crs(soil_ras) = proj_crs
+
+#now extract
+conserv_area_soil <- raster::extract(soil_ras, #Storie Index Raster Stack
+                           kern_conserve_sp, #Extract based on Kern Ag polygon outlines
+                           fun = mean, #Find the mean value of raster cells that overlap with each polygon
+                           small = TRUE, #Include mean values for small polygons
+                           weights = TRUE, #Add weights for weighted means
+                           normalizeWeights = TRUE,
+                           na.rm = TRUE, #Ignore NAs when calculating mean values BUT then need to change 0s back to NAs
+                           df = TRUE #save as a df
+                           )
+
+#change '0' values to NA
+conserv_area_soil[conserv_area_soil == 0] <- NA
+
+#replace names
+names(conserv_area_soil) <- c("ID", "interpl", "interplRV", "interphr", "interphh", "interpllc", "interplrc", "interphrc", "interphhc")
+
+#bind to conservation areas shapefile
+conservation_storie <- cbind(kern_conserve_hist, conserv_area_soil)
 ```
+

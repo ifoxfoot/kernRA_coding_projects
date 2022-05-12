@@ -21,6 +21,7 @@ proj_crs = crs("+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y
 ```
 
 ```{r}
+
 #read in kernfields
 
 #create list of years
@@ -53,10 +54,16 @@ fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 1997:2020)),
                  )
 
 
-#rbind inputs
-all_fields_binded <- do.call(rbind, fields_cleaned_list) %>% 
-  st_make_valid() %>% 
-  mutate(year = lubridate::year(dt_act))
+
+
+#bind fields together, include new column "source" saying what dataset it came from
+kernfield_bind <- do.call(rbind, lapply(names(fields_cleaned_list), 
+                                    function(x) 
+                                      cbind(fields_cleaned_list[[x]], 
+                                            source = x)
+                                    )) %>% 
+  #turn source column into year column by keeping only numbers
+    mutate(year = gsub("\\D", "", source))
 ```
 
 # Read in and Process Historical Landuse Data
@@ -95,8 +102,30 @@ for (i in FAM_years) {
   assign(filename_FAM, read_sf(wd_FAM))
 }
 
+#now select only fallowed fields per each year (coded different in different years)
+Fallowed_2011 <- FAM_2011 %>% 
+  filter(Fallowed == 2)
+
+Fallowed_2012 <- FAM_2012 %>% 
+  filter(Fallowed == 10)
+
+Fallowed_2013 <- FAM_2013 %>% 
+  filter(Fallowed == 10)
+
+Fallowed_2014 <- FAM_2014 %>% 
+  filter(Fallowed == 2)
+
+Fallowed_2015 <- FAM_2015 %>% 
+  filter(Fallowed == 2)
+
+Fallowed_2016 <- FAM_2016 %>% 
+  filter(Fallowed == 2)
+
+Fallowed_2017 <- FAM_2017 %>% 
+  filter(Fallowed == 10)
+
 #loop through listed sf objects and tidy
-FAM_cleaned_list <- lapply(mget(sprintf("FAM_%d", 2011:2017)), 
+FAM_cleaned_list <- lapply(mget(sprintf("Fallowed_%d", 2011:2017)), 
                  function(x) 
                    {
                    clean_names(x) %>%
@@ -112,6 +141,7 @@ FAM_binded <- do.call(rbind, lapply(names(FAM_cleaned_list),
                                             source = x)
                                     ))
 
+#create a year column
 FAM_binded <- FAM_binded %>% 
   mutate(year = str_remove(source, "FAM_")) %>% 
   select(-source)
@@ -127,16 +157,21 @@ FAM data can be considered fallowed when
 #select FAM fallowed that were irrigated
 fallowed_irrigated_FAM <- st_filter(FAM_binded, hist_irrigated, .predicate = st_intersects)
 
-#write function to select only FAM fields that do not intersect with any kernfields in the same year or from previous year (AKA they can intersect with future kernfields)
+#write function to select only FAM fields that do not overlap with any kernfields in the same year
 true_fallow_function <- function(x) {
   
-  kernfields_before <- all_fields_binded %>% 
-    filter(year <= x)
-  
-  fam_before <- fallowed_irrigated_FAM %>% 
+  kernfields_current <- kernfield_bind  %>% 
     filter(year == x)
   
-  true_fallowed_output <<- fam_before[!lengths(st_intersects(fam_before, kernfields_before)), ]
+   kernfields_before <- kernfield_bind %>% 
+    filter(year < x)
+  
+  fam_current <- FAM_binded %>% 
+    filter(year == x)
+  
+  true_fallowed_output <- st_difference(fam_current, kernfields_current)
+  
+  return(true_fallowed_output)
   
 }
 
@@ -146,7 +181,6 @@ fallow_list <- lapply(FAM_years, true_fallow_function)
 #rbind true fallow together
 true_fallow_binded <- do.call(rbind, fallow_list)
 
-#need to filter for correct values
 
 
 #write to shapefile
