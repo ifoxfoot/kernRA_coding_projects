@@ -57,17 +57,25 @@ sample_bind <- do.call(rbind, lapply(names(kern_cropped_list),
                                       cbind(kern_cropped_list[[x]], 
                                             source = x)
                                     )) %>% 
-  #turn source column into year column by keeping only numbers
-    mutate(year = gsub("\\D", "", source))
+    #turn source column into year column by keeping only numbers
+    mutate(year = gsub("\\D", "", source)) %>% 
+    #Create ID column
+    mutate(id = row_number()) %>% 
+    #merge ID column to pmt_site
+    mutate(pmt_site_id = str_c(pmt_site, "-", id)) %>% 
+    #merge this column with year
+    mutate(pmt_site_string = str_c(year, "_", pmt_site_id))
 
-#merge permit site and year, then select only pmt_site and year 
+
+
+#select only column we need, clean geometry
 sample_clean <- sample_bind %>% 
-  mutate(pmt_site_year = str_c(year, "_", pmt_site)) %>% 
-  dplyr::select(pmt_site_year) %>% 
+  dplyr::select(pmt_site_string) %>% 
   st_make_valid()
+  
 
 #write to shapefile
-st_write(sample_clean, "data/shapefiles_written/sample_clean.shp", append = F)
+#st_write(sample_clean, "data/shapefiles_written/sample_clean.shp", append = F)
 ```
 
 I took the shapefile `sample_clean.shp` and uploaded it to mapshaper's online interface (https://mapshaper.org/). Then I entered in the console `$ mosaic` and downloaded results as a shapefile, as seen in the next code chunk.
@@ -78,12 +86,12 @@ This thread could potentially improve workflow https://github.com/mbloch/mapshap
 #read in mapshaper output
 sample_mosiac <- st_read("data/mapshaper_outputs/sample_clean/sample_clean.shp")
 
-#intersect with field data
+#intersect with field data 
 sample_join <- st_intersection(st_buffer(sample_mosiac, dist = -1), sample_clean)
 
 #pivot so each column is a year
 sample_pivot <- sample_join %>% 
-  separate(pmt_site_year, into = c("year", "pmt_site"), sep = "_") %>% 
+  separate(pmt_site_string, into = c("year", "pmt_site"), sep = "_") %>% 
   select(-FID) %>% 
   pivot_wider(names_from = year, values_from = pmt_site) %>%
   st_sf() %>% 
@@ -95,19 +103,98 @@ sample_pivot_sep <- sample_pivot %>%
   unnest_wider(c(`2017`, `2018`, `2019`), names_sep = "_")
 
 #write to csv
-write_csv(sample_pivot_sep, "data/shapefiles_written/2017_2019_sample.csv")
+#write_csv(sample_pivot_sep, "data/shapefiles_written/2017_2019_sample.csv")
+
+#write to shp file
+#st_write(sample_pivot_sep, "data/shapefiles_written/2017_2019_shapefile.shp")
+```
+
+# How to get rid of slivers?
+
+
+#### Drop fields under 1 acre
+
+```{r}
+#get rid of small fields
+sample_pivot_over_acre <- sample_pivot %>% 
+  filter(area_sq_ft >= units::set_units(43560,"ft^2"))
+
+#unnest listed pmt_site so they are each in own column
+sample_pivot_over_acre_sep <- sample_pivot_over_acre %>% 
+  unnest_wider(c(`2017`, `2018`, `2019`), names_sep = "_")
+
+#what fields are under one acre?
+under_acre <- sample_bind %>%
+  st_sf() %>% 
+  mutate(area = st_area(.)) %>% 
+  filter(area < units::set_units(43560,"ft^2"))
+
+#gets rid of many but not all slivers
+#deletes 65 true fields but, there are only 60 true fields that are under one acre. 
+#what are the other five?
+```
+
+#### Negative buffer
+
+```{r}
+#intersect with field data BUT negative buffer field data
+neg_sample_join<- st_intersection(st_buffer(sample_mosiac, dist = -20), sample_clean)
+
+#pivot so each column is a year
+neg_sample_pivot <- neg_sample_join %>% 
+  separate(pmt_site_string, into = c("year", "pmt_site"), sep = "_") %>% 
+  select(-FID) %>% 
+  pivot_wider(names_from = year, values_from = pmt_site) %>%
+  st_sf() %>% 
+  filter(!st_is_empty(.)) %>% 
+  st_buffer(dist = 1) %>%
+  mutate(area_sq_ft = st_area(.))
+
+#unnest listed pmt_site so they are each in own column
+neg_sample_pivot_sep <- neg_sample_pivot %>% 
+  unnest_wider(c(`2017`, `2018`, `2019`), names_sep = "_")
+
+#is every permit_site represented in the pivot table?
+```
+
+```{r}
+#create df of pivot table without geometry
+pivot_sep_no_geo <- neg_sample_pivot_sep %>% 
+  select(-geometry, -area_sq_ft)
+
+#create function to check if pmt_site is present anywhere in the pivot table
+pmt_present <- function(x) {
+  present <- any(pivot_sep_no_geo==x)
+  return(present)
+}
+
+#create list of original pmt_sites
+pmt_list <- as.list(sample_bind$pmt_site_id)
+
+#run through list and check if they are in pivot df
+present_list <- lapply(pmt_list, pmt_present)
+
+#create df of results
+present_df <- as.data.frame(cbind(pmt_list, present_list)) %>% 
+  filter(is.na(present_list))
+
+#confirmed every pmt site is there in original data
+#with a buffer of -10 we miss 16 fields
+#with a buffer of -20 we miss 31 fields
+#with a buffer of -30 we miss 40 fields
+#with a buffer of -50 we miss 76 fields
 ```
 
 # Original Data
 
-```{r}
+```{r, out.width="120%"}
 #reference what output should be
 tmap_mode("view")
 
 tm_shape(sample_bind) +
   tm_polygons(id = "pmt_site") +
   tm_facets(by = "year", sync = T) +
-  tm_layout(panel.labels = c("2017", "2018", "2019"))
+  tm_layout(panel.labels = c("2017", "2018", "2019"), frame.lwd = 100)
 ```
 
 # PMT_SITE Pivot Table
@@ -120,3 +207,26 @@ tm_shape(sample_pivot) +
   tm_polygons(id = "pmt_site_year") +
   tmap_options(check.and.fix = TRUE)
 ```
+
+# PMT_SITE Pivot Table (over 1 acre)
+
+```{r}
+#test output
+tmap_mode("view")
+
+tm_shape(sample_pivot_over_acre) +
+  tm_polygons(id = "pmt_site_year") +
+  tmap_options(check.and.fix = TRUE)
+```
+
+# PMT_SITE Pivot Table (negative 20 ft buffer)
+
+```{r}
+#test output
+tmap_mode("view")
+
+tm_shape(neg_sample_pivot) +
+  tm_polygons(id = "pmt_site_year") +
+  tmap_options(check.and.fix = TRUE)
+```
+

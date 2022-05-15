@@ -103,25 +103,32 @@ for (i in FAM_years) {
 }
 
 #now select only fallowed fields per each year (coded different in different years)
-Fallowed_2011 <- FAM_2011 %>% 
+Fallowed_2011 <- FAM_2011  %>% 
+  st_transform(crs = proj_crs) %>% 
   filter(Fallowed == 2)
 
-Fallowed_2012 <- FAM_2012 %>% 
+Fallowed_2012 <- FAM_2012  %>% 
+  st_transform(crs = proj_crs) %>% 
   filter(Fallowed == 10)
 
-Fallowed_2013 <- FAM_2013 %>% 
+Fallowed_2013 <- FAM_2013  %>% 
+  st_transform(crs = proj_crs) %>% 
   filter(Fallowed == 10)
 
-Fallowed_2014 <- FAM_2014 %>% 
+Fallowed_2014 <- FAM_2014  %>% 
+  st_transform(crs = proj_crs) %>% 
   filter(Fallowed == 2)
 
-Fallowed_2015 <- FAM_2015 %>% 
+Fallowed_2015 <- FAM_2015  %>% 
+  st_transform(crs = proj_crs) %>% 
   filter(Fallowed == 2)
 
-Fallowed_2016 <- FAM_2016 %>% 
+Fallowed_2016 <- FAM_2016  %>% 
+  st_transform(crs = proj_crs) %>% 
   filter(Fallowed == 2)
 
-Fallowed_2017 <- FAM_2017 %>% 
+Fallowed_2017 <- FAM_2017  %>% 
+  st_transform(crs = proj_crs) %>% 
   filter(Fallowed == 10)
 
 #loop through listed sf objects and tidy
@@ -139,11 +146,8 @@ FAM_binded <- do.call(rbind, lapply(names(FAM_cleaned_list),
                                     function(x) 
                                       cbind(FAM_cleaned_list[[x]], 
                                             source = x)
-                                    ))
-
-#create a year column
-FAM_binded <- FAM_binded %>% 
-  mutate(year = str_remove(source, "FAM_")) %>% 
+                                    )) %>% 
+  mutate(year = str_remove(source, "Fallowed_")) %>% 
   select(-source)
 ```
 
@@ -163,23 +167,22 @@ true_fallow_function <- function(x) {
   kernfields_current <- kernfield_bind  %>% 
     filter(year == x)
   
-   kernfields_before <- kernfield_bind %>% 
-    filter(year < x)
-  
   fam_current <- FAM_binded %>% 
     filter(year == x)
   
-    true_fallowed_output <<- fam_current[!lengths(st_intersects(fam_current, kernfields_current)), ]
+    true_fallowed_output <- st_intersection(fam_current, kernfields_current)
   
+    return(true_fallowed_output)
 }
 
 #loop through FAM years
 fallow_list <- lapply(FAM_years, true_fallow_function)
 
 #rbind true fallow together
-true_fallow_binded <- do.call(rbind, fallow_list)
+true_fallow_binded <- do.call(rbind, fallow_list) %>% 
+  filter(is.na(pmt_site))
 
 #write to shapefile
-st_write(true_fallow_binded, "data/shapefiles_written/true_fam.shp", append = F)
+#st_write(true_fallow_binded, "data/shapefiles_written/true_fam.shp", append = F)
 ```
 
