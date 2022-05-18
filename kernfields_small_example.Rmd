@@ -111,6 +111,36 @@ sample_pivot_sep <- sample_pivot %>%
 
 # How to get rid of slivers?
 
+#### Function to test how many true pmt_site_ids are dropped
+
+```{r}
+pmt_deleted <- function (pivot_sep_name) {
+  #create df of pivot table without geometry
+  pivot_sep_no_geo <- pivot_sep_name %>% 
+    select(-geometry, -area_sq_ft)
+  
+  #create function to check if pmt_site is present anywhere in the pivot table
+  pmt_present <- function(x) 
+    {
+    present <- any(pivot_sep_no_geo==x)
+    return(present)
+  }
+  
+  #create list of original pmt_sites
+  pmt_list <- as.list(sample_bind$pmt_site_id)
+
+  #run through list and check if they are in pivot df
+  present_list <- lapply(pmt_list, pmt_present)
+  
+  #create df of results
+  present_df <- as.data.frame(cbind(pmt_list, present_list)) %>% 
+    filter(is.na(present_list))
+
+  return(present_df)
+  
+  }
+```
+
 
 #### Drop fields under 1 acre
 
@@ -155,34 +185,42 @@ neg_sample_pivot_sep <- neg_sample_pivot %>%
   unnest_wider(c(`2017`, `2018`, `2019`), names_sep = "_")
 
 #is every permit_site represented in the pivot table?
-```
 
-```{r}
-#create df of pivot table without geometry
-pivot_sep_no_geo <- neg_sample_pivot_sep %>% 
-  select(-geometry, -area_sq_ft)
-
-#create function to check if pmt_site is present anywhere in the pivot table
-pmt_present <- function(x) {
-  present <- any(pivot_sep_no_geo==x)
-  return(present)
-}
-
-#create list of original pmt_sites
-pmt_list <- as.list(sample_bind$pmt_site_id)
-
-#run through list and check if they are in pivot df
-present_list <- lapply(pmt_list, pmt_present)
-
-#create df of results
-present_df <- as.data.frame(cbind(pmt_list, present_list)) %>% 
-  filter(is.na(present_list))
-
-#confirmed every pmt site is there in original data
 #with a buffer of -10 we miss 16 fields
 #with a buffer of -20 we miss 31 fields
 #with a buffer of -30 we miss 40 fields
 #with a buffer of -50 we miss 76 fields
+```
+
+#### Conditional statement
+
+```{r}
+#create column indicating if it was duplicated, area column
+sample_conditional <- sample_join %>%
+  group_by(pmt_site_string) %>% 
+  mutate(dup = n()>1) %>% 
+  ungroup() %>% 
+  mutate(area_sq_ft = st_area(.))
+
+#filter so fields smaller than one acre are only dropped if duplicated
+sample_conditional_drop <- sample_conditional %>% 
+  filter(!(dup  == "TRUE" & area_sq_ft <= units::set_units(43560,"ft^2")))
+
+#pivot so each column is a year
+conditional_sample_pivot <- sample_conditional_drop %>% 
+  separate(pmt_site_string, into = c("year", "pmt_site"), sep = "_") %>% 
+  select(-FID) %>% 
+  pivot_wider(names_from = year, values_from = pmt_site) %>%
+  st_sf() %>% 
+  filter(!st_is_empty(.)) %>% 
+  st_buffer(dist = 1) %>%
+  mutate(area_sq_ft = st_area(.))
+
+#unnest listed pmt_site so they are each in own column
+conditional_sample_pivot_sep <- conditional_sample_pivot %>% 
+  unnest_wider(c(`2017`, `2018`, `2019`), names_sep = "_")
+
+#drops 25
 ```
 
 # Original Data
@@ -194,7 +232,7 @@ tmap_mode("view")
 tm_shape(sample_bind) +
   tm_polygons(id = "pmt_site") +
   tm_facets(by = "year", sync = T) +
-  tm_layout(panel.labels = c("2017", "2018", "2019"), frame.lwd = 100)
+  tm_layout(panel.labels = c("2017", "2018", "2019"))
 ```
 
 # PMT_SITE Pivot Table
@@ -218,6 +256,18 @@ tm_shape(sample_pivot_over_acre) +
   tm_polygons(id = "pmt_site_year") +
   tmap_options(check.and.fix = TRUE)
 ```
+
+# PMT_SITE Pivot Table (conditionally over 1 acre)
+
+```{r}
+#test output
+tmap_mode("view")
+
+tm_shape(conditional_sample_pivot) +
+  tm_polygons(id = "pmt_site_year") +
+  tmap_options(check.and.fix = TRUE)
+```
+
 
 # PMT_SITE Pivot Table (negative 20 ft buffer)
 

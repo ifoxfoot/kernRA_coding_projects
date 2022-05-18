@@ -11,6 +11,7 @@ library(raster)
 library(sf)
 library(tidyverse)
 library(janitor)
+library(rmapshaper)
 ```
 
 # Read in and Process Kern Field Data
@@ -64,6 +65,9 @@ kernfield_bind <- do.call(rbind, lapply(names(fields_cleaned_list),
                                     )) %>% 
   #turn source column into year column by keeping only numbers
     mutate(year = gsub("\\D", "", source))
+
+#buffer by 30 m to get rid of slivers when using kernfields to mask out FAM data
+kernfield_buffer <- st_buffer(kernfield_bind, 30)
 ```
 
 # Read in and Process Historical Landuse Data
@@ -119,6 +123,7 @@ Fallowed_2014 <- FAM_2014  %>%
   st_transform(crs = proj_crs) %>% 
   filter(Fallowed == 2)
 
+#check if this one is correct
 Fallowed_2015 <- FAM_2015  %>% 
   st_transform(crs = proj_crs) %>% 
   filter(Fallowed == 2)
@@ -158,19 +163,16 @@ FAM data can be considered fallowed when
 * 2. Historical data shows that it was previously irrigated land
 
 ```{r}
-#select FAM fallowed that were irrigated
-fallowed_irrigated_FAM <- st_filter(FAM_binded, hist_irrigated, .predicate = st_intersects)
-
 #write function to select only FAM fields that do not overlap with any kernfields in the same year
 true_fallow_function <- function(x) {
   
-  kernfields_current <- kernfield_bind  %>% 
+  kernfields_current <- kernfield_buffer  %>% 
     filter(year == x)
   
   fam_current <- FAM_binded %>% 
     filter(year == x)
   
-    true_fallowed_output <- st_intersection(fam_current, kernfields_current)
+    true_fallowed_output <- rmapshaper::ms_erase(fam_current, kernfields_current)
   
     return(true_fallowed_output)
 }
@@ -180,9 +182,23 @@ fallow_list <- lapply(FAM_years, true_fallow_function)
 
 #rbind true fallow together
 true_fallow_binded <- do.call(rbind, fallow_list) %>% 
-  filter(is.na(pmt_site))
+  st_make_valid()
+
+#what does it intersect with previously? all time
+true_fallow_fields <- st_intersection(true_fallow_binded, kernfield_bind, left = T)
 
 #write to shapefile
-#st_write(true_fallow_binded, "data/shapefiles_written/true_fam.shp", append = F)
+#st_write(true_fallow_binded, "data/shapefiles_written/true_fam_test.shp", append = F)
+```
+
+# What fallowed fields never intersect with fields? 
+
+```{r}
+#write function to select only FAM fields that do not overlap with any kernfields in the same year
+true_fallowed_never_farmed <- rmapshaper::ms_erase(st_make_valid(true_fallow_fields), st_buffer(kernfield_bind, 0))
+
+#write to shapefile
+st_write(true_fallowed_never_farmed, "data/shapefiles_written/true_fam_never_farmed.shp", append = F)
+
 ```
 

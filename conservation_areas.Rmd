@@ -49,7 +49,7 @@ soil_quality_factX <- read_sf(here("R_input", "spatial", "SSURGOsoil", "kern_soi
 #read in historical landuse data
 hist_landu <- read_sf(here("data", "esrp_histlu", "histlu200408.shp")) %>% 
   st_transform(crs = proj_crs) %>% 
-  select(POT_LU, LU1885, LU1912, LU1945, LU1977, LU2004)
+  dplyr::select(POT_LU, LU1885, LU1912, LU1945, LU1977, LU2004)
 ```
 
 ## Narrow Down Conservation Areas
@@ -106,17 +106,8 @@ long_units <- units_kern %>%
 
 #bind together 
 #not including units/superunits because they are super big aggregations
-kern_conservation_areas <- rbind(long_easements, long_holdings)
-
-plot(st_geometry(kern_conservation_areas))
-
-#mutate to include column with gap status #fix this for case when multiple gap status exist
-kern_conservation_GAP <- kern_conservation_areas %>% 
-  mutate(gap = case_when(gap1_acres > 0 ~ "Gap 1",
-                         gap2_acres > 0 ~ "Gap 2",
-                         gap3_acres > 0 ~ "Gap 3"))
-
-plot(kern_conservation_GAP["gap"])
+kern_conservation_areas <- rbind(long_easements, long_holdings) %>% 
+  mutate(id = rownames(.))
 ```
 
 ## Add Historical Landuse Data
@@ -135,84 +126,34 @@ kern_conserve_hist <- st_join(kern_conservation_areas, hist_landu, left = T)
 kern_conserve_soil_joined <- st_join(kern_conserve_hist, soil_quality, left = T)
 ```
 
+## Filter
 
 ```{r}
-#explore soil quality by rasterizing soil and calculating average rating in conservation area
+#filter for areas with good soil, in valley, and not irrigated in 2004
+ideal_conservation_area <- kern_conserve_soil_joined %>% 
+  filter(interphrc %in% c("Grade 1 - Excellent", "Grade 2 - Good")) %>% 
+  filter(!is.na(POT_LU)) %>% 
+  # filter(LU2004 != "Irrigated") %>% 
+  # filter(LU1977 != "Irrigated")
 
-#first convert conservation areas with landuse columns to spatial format
-#convert to spatial
-kern_conserve_sp <- as(kern_conserve_hist, "Spatial")
+#get polygons within three km of 2016-2019 farms
+ideal_conservation_near_farms <- st_intersection(ideal_conservation_area, st_buffer(farms, 3000))
 
-#write function to change categorical cols into numeric for rasterization
-class_cols <- function(colname) {
-  case_when(
-      str_detect(colname, "Grade 1") ~ 1,
-      str_detect(colname, "Grade 2") ~ 2,
-      str_detect(colname, "Grade 3") ~ 3,
-      str_detect(colname, "Grade 4") ~ 4,
-      str_detect(colname, "Grade 5") ~ 5,
-      str_detect(colname, "Grade 6") ~ 6
-  )
-}
+#add column for historical irrigation
 
-#reclassing categorical variables
-soil_sf_classed <- soil_quality %>% 
-  mutate(interpllc_classed = class_cols(interpllc)) %>% 
-  mutate(interplrc_classed = class_cols(interplrc)) %>% 
-  mutate(interphrc_classed = class_cols(interphrc)) %>% 
-  mutate(interphhc_classed = class_cols(interphhc))
+#taking a loooong time
+#ideal_conservation_not_farmed <- st_difference(ideal_conservation_near_farms, farms)
 
+#write to shapefile
+#st_write(ideal_conservation_not_farmed, "data/shapefiles_written/conservation_areas_may18.shp")
 
-# Initialize empty raster
-ras = raster()
+#get original data that matches the id of polygons in ideal conservation near farms
+best_conserve_bets <- kern_conservation_areas %>% 
+  filter(id %in% ideal_conservation_near_farms$id)
 
-# Set the raster extent based on the soil shapefile
-extent(ras) = extent(soil_quality)
-
-# Set raster resolution (meters)
-res(ras) = 10
-
-#rasterize (each raster contains one storie index measure)
-
-#continuous values
-interpl = fasterize(soil_quality, ras, field = "interpl")
-interplRV = fasterize(soil_quality, ras, field = "interplRV")
-interphr = fasterize(soil_quality, ras, field = "interphr")
-interphh = fasterize(soil_quality, ras, field = "interphh")
-
-#classed values
-interpllc = fasterize(soil_sf_classed, ras, field = "interpllc_classed")
-interplrc = fasterize(soil_sf_classed, ras, field = "interplrc_classed")
-interphrc = fasterize(soil_sf_classed, ras, field = "interphrc_classed")
-interphhc = fasterize(soil_sf_classed, ras, field = "interphhc_classed")
-
-#create list of all rasters
-rasters <- c(interpl, interplRV, interphr, interphh, interpllc, interplrc, interphrc, interphhc)
-
-#create raster stack
-soil_ras <- stack(rasters)
-
-#project
-crs(soil_ras) = proj_crs
-
-#now extract
-conserv_area_soil <- raster::extract(soil_ras, #Storie Index Raster Stack
-                           kern_conserve_sp, #Extract based on Kern Ag polygon outlines
-                           fun = mean, #Find the mean value of raster cells that overlap with each polygon
-                           small = TRUE, #Include mean values for small polygons
-                           weights = TRUE, #Add weights for weighted means
-                           normalizeWeights = TRUE,
-                           na.rm = TRUE, #Ignore NAs when calculating mean values BUT then need to change 0s back to NAs
-                           df = TRUE #save as a df
-                           )
-
-#change '0' values to NA
-conserv_area_soil[conserv_area_soil == 0] <- NA
-
-#replace names
-names(conserv_area_soil) <- c("ID", "interpl", "interplRV", "interphr", "interphh", "interpllc", "interplrc", "interphrc", "interphhc")
-
-#bind to conservation areas shapefile
-conservation_storie <- cbind(kern_conserve_hist, conserv_area_soil)
+#group to get list of names.
+best_conserve_bets_grouped <- best_conserve_bets %>% 
+  group_by(unit_id, unit_name) %>% 
+  count()
 ```
 
