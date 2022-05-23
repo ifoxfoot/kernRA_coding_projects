@@ -18,6 +18,7 @@ library(sf) #for polygons
 library(tidyverse) #for data wrangling
 library(tmap) #for interactive maps
 library(janitor) #for cleaning names
+library(reshape2) #for melting and recasting data frames (long to wide format)
 ```
 
 ```{r}
@@ -270,7 +271,6 @@ tm_shape(conditional_sample_pivot) +
   tmap_options(check.and.fix = TRUE)
 ```
 
-
 # PMT_SITE Pivot Table (negative 20 ft buffer)
 
 ```{r}
@@ -285,7 +285,7 @@ tm_shape(neg_sample_pivot) +
 # Creating table with years fallowed and last crop
 
 ```{r}
-#identifying fallowed fields function (in progress)
+#identifying fallowed fields function
 years <- c(2017, 2018, 2019)
 
 #create dataset for for for loop to loop over
@@ -301,86 +301,72 @@ fallowed_sample_pivot <- fallowed_sample_pivot %>%
                             T ~ "not_fallowed"))
 }
 
+#create another row number 
 fallowed_sample_pivot <- fallowed_sample_pivot %>% 
   mutate(fallow_count_id = row_number())
 
+#drop geometry
 fallowed_sample_no_geo <- fallowed_sample_pivot %>% 
   st_drop_geometry()
-
 ```
 
 ```{r}
-#find how long 2019 fallowed sites have been fallowed
-years_fallowed <- fallowed_sample_pivot_2019 %>% 
-  mutate(yrs_fallowed = case_when(
-    fallowed_2019 != "fallowed" ~ "0",
-    fallowed_2019 == "fallowed" & fallowed_2018 != "fallowed" ~ "1",
-    fallowed_2019 == "fallowed" & fallowed_2018 == "fallowed" & fallowed_2017 != "fallowed" ~ "2",
-    fallowed_2017 == "fallowed" & fallowed_2018 == "fallowed" & fallowed_2019 == "fallowed" ~ "3",
-    T ~ "missing"))
+#transform wide data to the long format
+sample_long = melt(fallowed_sample_no_geo, id.vars = c("2017", "2018", "2019", "area_sq_ft", "fallow_count_id")) 
 
-#find out what the pmt_site(s) were before fallowed
-last_crop <- years_fallowed %>%
-  mutate(last_crop = case_when(yrs_fallowed == "0" ~ as.character(`2019`),
-                               yrs_fallowed == "1" ~ as.character(`2018`),
-                               yrs_fallowed == "2" ~ as.character(`2017`),
-                               TRUE ~ "always_fallowed"))
-
-plot(last_crop["yrs_fallowed"])
-```
-
-```{r}
-id = sample(1:20, 5)
-first_active = c(1,1,1,2,3)
-week1 = c(1,1,1,0,0)
-week2 = c(1,0,0,1,0)
-week3 = c(1,0,1,0,1)
-week4 = c(1,0,0,0,1)
-week5 = c(0,0,0,0,1)
-
-df = data.frame(cbind(id, first_active, week1, week2, week3, week4, week5))
-
-df_long = melt(df, id.vars = c("id", "first_active")) #transformed my wide data to the long format
-colnames(df_long) = c("id", "first_active", "week_num", "week_orders")
-
-long_long = 
-df_long %>%
-mutate(p_var = paste("p", substr(week_num, 5, 5), sep="")) %>% 
-  #created p-columns that correspond to respective weeks arrange(id, week_num) %>%
-group_by(id) %>%
-mutate(active_var = ifelse(week_orders != 0, "active", 
-                  ifelse(first_active < as.numeric(substr(week_num, 5,5)),
-                         "lapsed", NA))) %>% 
-#%>% #created a column that would return either "active", "lapsed" or NA depending on user activity
-     mutate(lapsed_num =  sequence(rle(active_var)[["lengths"]])) #created a column that would count the number of occurences of "lapsed" for a given id; it would start counting from 1 if after "active" appeared 
-            final = ifelse(active_var == "active", active_var, 
-                           ifelse(active_var == "lapsed", paste(active_var, lapsed_num, sep=""), NA))) 
-     #%>% #finally, the column takes "active" status or coalesces "lapsed" with the sequence number
-select(id, first_active, week_num, week_orders, p_var, final) %>%
-                           data.frame()
-
-df_weeks = dcast(df_long[, 1:4], id + first_active ~ week_num,  value.var = "week_orders")
-
-df_p = dcast(df_long[, c(1:2, 5:6)], id + first_active ~ p_var,  value.var = "final")
-```
-
-```{r}
-library(reshape2)
-
-sample_long = melt(fallowed_sample_no_geo, id.vars = c("2017", "2018", "2019", "area_sq_ft", "fallow_count_id")) #transformed my wide data to the long format
+#write new column names
 colnames(sample_long) = c("2017", "2018", "2019", "area_sq_ft", "fallow_count_id", "year", "status")
 
-
 sample_long_mutate = sample_long %>%
-  mutate(p_var = paste("p", substr(year, 10, 14), sep = "")) %>% 
   #created p-columns that correspond to respective weeks arrange(id, week_num)
+  mutate(p_var = paste0("p", substr(year, 10, 14))) %>% 
   group_by(fallow_count_id) %>%
+  #create column that counts how many active or fallowed are in a row
   mutate(lapsed_num = sequence(rle(status)[["lengths"]])) %>% 
   data_frame()
-#finally, the column takes "active" status or coalesces "lapsed" with the sequence number
 
+#convert if from long format to wide format #NOTE: col names need to be changed when more years are aadded
 df_p = dcast(sample_long_mutate[, c(1:7, 8:9)], fallow_count_id  ~ p_var,  value.var = "lapsed_num")
 
+#merge it with original data
 years_fallowed = merge(fallowed_sample_pivot, df_p, id = fallow_count_id)
+```
+
+```{r}
+library(zoo)
+
+#select only pmt_site columns
+just_pmt <- years_fallowed %>% 
+  select(`2019`, `2018`, `2017`) %>% 
+  st_drop_geometry()
+
+#replace null values with proper NAs
+just_pmt[just_pmt == "NULL"] <- NA
+  
+#find out what the pmt_site(s) were before fallowed
+data <- rownames_to_column(just_pmt, 'rn') %>% 
+    gather(key, val, -rn) %>%
+    group_by(rn) %>% 
+    fill(val) %>% 
+    spread(key, val) %>%
+    ungroup %>%
+    select(-rn)
+
+```
+
+
+```{r}
+d<-data.frame(c1=c("a",1:4), c2=c(NA,2,NA,4,5), c3=c(NA,3,4,NA,6))
+d2<-data.frame(c1=c("a",1:4), c2=c("a",2,2,4,5), c3=c("a",3,4,4,6))
+
+rownames_to_column(d, 'rn') %>% 
+    gather(key, val, -rn) %>%
+    group_by(rn) %>% 
+    fill(val) %>% 
+    spread(key, val) %>%
+    ungroup %>%
+    select(-rn)
+
+
 ```
 
