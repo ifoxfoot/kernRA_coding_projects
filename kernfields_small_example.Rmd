@@ -102,7 +102,7 @@ sample_pivot <- sample_join %>%
   mutate(area_sq_ft = st_area(.))
 
 #unnest listed pmt_site so they are each in own column
-sample_pivot_sep <- fallowed_sample_pivot_2019 %>% 
+sample_pivot_sep <- sample_pivot %>% 
   unnest_wider(c(`2017`, `2018`, `2019`), names_sep = "_")
 
 #write to csv
@@ -295,9 +295,9 @@ fallowed_sample_pivot <- sample_pivot
 for (i in years) {
 fallowed_sample_pivot <- fallowed_sample_pivot %>%
   mutate(!!paste0("fallowed_", i) 
-         := case_when(!!as.name(i) == "NULL" ~ "fallowed",
+         := case_when(!!as.name(i) == "NULL" ~ "fallowed_null",
                       str_detect(!!as.name(i), "-66000-") & 
-                        str_detect(!!as.name(i), ", ", negate = T) ~ "fallowed",
+                        str_detect(!!as.name(i), ", ", negate = T) ~ "fallowed_pmt",
                             T ~ "not_fallowed"))
 }
 
@@ -325,48 +325,76 @@ sample_long_mutate = sample_long %>%
   mutate(lapsed_num = sequence(rle(status)[["lengths"]])) %>% 
   data_frame()
 
-#convert if from long format to wide format #NOTE: col names need to be changed when more years are aadded
+#convert if from long format to wide format #NOTE: col names need to be changed when more years are added
 df_p = dcast(sample_long_mutate[, c(1:7, 8:9)], fallow_count_id  ~ p_var,  value.var = "lapsed_num")
 
 #merge it with original data
-years_fallowed = merge(fallowed_sample_pivot, df_p, id = fallow_count_id)
+years_fallowed = merge(df_p, fallowed_sample_pivot, id = fallow_count_id) %>% 
+  st_sf()
+```
+
+Iris use this thread 
+https://stackoverflow.com/questions/39575664/r-for-loop-creating-new-columns-populated-by-conditional-statement-based-on-the 
+```{r}
+#library(zoo)
+# 
+# #select only active pmt_site columns
+# just_pmt <- years_fallowed %>% 
+#   mutate(`2016` = NA_character_) %>% 
+#   select(`2016`,`2017`, `2018`, `2019`) %>% 
+#   mutate_all(., function(x) case_when(
+#     str_detect(as.character(x), "-66000-") & 
+#       str_detect(as.character(x), ", ", negate = T) ~ NA,  
+#     T ~ as.character(x)))
+# 
+# 
+# #needs to be casewhen fallowed, is NA
+# 
+# #replace null values with proper NAs
+# just_pmt[just_pmt == "NULL"] <- NA_character_
+#   
+# #spread to wide format
+# just_pmt_spread <- just_pmt %>% 
+#   unnest_wider(c(`2017`, `2018`, `2019`), names_sep = "_")
+# 
+# #fill NAs to the right
+# d <- t(na.locf(t(just_pmt_spread))) %>% 
+#   as.data.frame()
 ```
 
 ```{r}
-library(zoo)
+#tells me what year the last active crops where
+last_crop_df<- years_fallowed %>%
+  mutate(`2016` = "outside_time_range") %>% 
+  mutate(last_crop_2019 =
+           case_when(fallowed_2019 == "fallowed" 
+                                   ~ as.character(eval(2019 - p2019)),
+                                   T ~ "2019")) %>% 
+  mutate(last_crop_final = "find_me")
 
-#select only pmt_site columns
-just_pmt <- years_fallowed %>% 
-  select(`2019`, `2018`, `2017`) %>% 
-  st_drop_geometry()
 
-#replace null values with proper NAs
-just_pmt[just_pmt == "NULL"] <- NA
+# for(i in 2017:2019) {
+#   final_last_crop <- last_crop_df %>%
+#     mutate(last_crop_final = case_when(last_crop_2019 == as.character(i) ~ as.character(!!as.name(i)),
+#                                 T ~ last_crop_final))
+# }
+
+#replaces year with last active crop
+last_crop_mutate <- last_crop_df%>%
+  mutate(last_crop_2019 = case_when(last_crop_2019 == "2016" ~ as.character(`2016`),
+                                    last_crop_2019 == "2017" ~ as.character(`2017`),
+                                    last_crop_2019 == "2018" ~ as.character(`2018`),
+                                    T ~ as.character(`2019`)))
+
+#cleaning up cols
+last_crop_clean <- last_crop_mutate %>% 
+  mutate(years_fallowed_2019 = 
+         case_when(fallowed_2019 == "not_fallowed" ~ "0",
+                  T ~ as.character(p2019))) %>% 
+  select(-c(fallowed_2017:fallowed_2019, p2017:p2019, `2016`, fallow_count_id))
+
   
-#find out what the pmt_site(s) were before fallowed
-data <- rownames_to_column(just_pmt, 'rn') %>% 
-    gather(key, val, -rn) %>%
-    group_by(rn) %>% 
-    fill(val) %>% 
-    spread(key, val) %>%
-    ungroup %>%
-    select(-rn)
 
 ```
 
-
-```{r}
-d<-data.frame(c1=c("a",1:4), c2=c(NA,2,NA,4,5), c3=c(NA,3,4,NA,6))
-d2<-data.frame(c1=c("a",1:4), c2=c("a",2,2,4,5), c3=c("a",3,4,4,6))
-
-rownames_to_column(d, 'rn') %>% 
-    gather(key, val, -rn) %>%
-    group_by(rn) %>% 
-    fill(val) %>% 
-    spread(key, val) %>%
-    ungroup %>%
-    select(-rn)
-
-
-```
 
