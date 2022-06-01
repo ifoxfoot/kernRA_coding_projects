@@ -17,29 +17,23 @@ knitr::opts_chunk$set(
 knitr::opts_chunk$set(echo = TRUE)
 library(sf) #for polygons
 library(tidyverse) #for data wrangling
-library(here) #for file paths
-library(raster) #for rasters
-library(fasterize) #for making rasters
+library(janitor) #for converting names to lowercase snake
 library(tmap) #for interactive maps
-library(janitor) #for cleaning names
-library(stampr) #for space time analysis
-library(sp) #spatial polygons, required for stampr to work
-library(smoothr) #drops slivers
-library(nngeo) #for removing geometry holes
+library(reshape2) #for melting and recasting data frames (long to wide format)
 ```
 
 # Introduction
 
 # Read in field data and wrangle it
 
-In this section read in the field data and wrangle it such that the end product is a single SF object where each row is a field and the columns are for geometry and for permitsite ID and year, which are merged to single string.
+In this section read in the field data and wrangle it such that the end product is a single SF object where each row is a field and the columns are for geometry and for permitsite ID, crop code, and year, which are merged to single string.
 
 ```{r field_data_wrangling}
 #read in kern data
 #must have the following file path in working directory: data/kernfields/kernYEAR.shp
 
 #create list of years
-kern_field_years <- c(2005:2020)
+kern_field_years <- c(1997:2021)
 
 #loop through read-in process
 for (i in kern_field_years) {
@@ -48,81 +42,78 @@ for (i in kern_field_years) {
   assign(filename, read_sf(wd))
 }
 
+kernfields_2021 <- kernfields_2021 %>% 
+  mutate(comm = Commodity)
+
 #loop through listed sf objects and tidy
-fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 2005:2020)), 
+fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 1997:2021)), 
                  function(x) 
                    {
-                   
                    clean_names(x) %>%
                      st_make_valid() %>% 
                      st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>%
-                     #mutate(township = "T", range = "R") %>% 
-                     dplyr::select(permit,
-                                   pmt_site,
-                                   township,
-                                   range,
-                                   s_status,
-                                   p_status,
-                                   dt_act)
-                   
+                     #select pmt_site and comm (not all years have comm code)
+                     dplyr::select(pmt_site, comm)
                      }
                  )
 
 
-#rbind inputs
-all_fields_binded <- do.call(rbind, fields_cleaned_list) %>% 
+#bind crop data together, include new column "source" saying what dataset it came from (year)
+kernfield_bind <- do.call(rbind, lapply(names(fields_cleaned_list), 
+                                    function(x) 
+                                      cbind(fields_cleaned_list[[x]], 
+                                            source = x)
+                                    )) %>% 
+    #turn source column into year column by keeping only numbers
+    mutate(year = gsub("\\D", "", source)) %>% 
+    #Create ID column
+    mutate(id = row_number()) %>% 
+    #merge comm code to pmt_site
+    mutate(pmt_site_code = str_c(pmt_site, "-", comm)) %>% 
+    #merge ID to  pmt_site
+    mutate(pmt_site_id = str_c(pmt_site_code, "-", id)) %>% 
+    #merge this column with year
+    mutate(pmt_site_string = str_c(year, "_", pmt_site_id))
+
+#select only column we need, clean geometry
+kernfield_clean <- kernfield_bind %>% 
+  dplyr::select(pmt_site_string) %>% 
+  st_buffer(dist = 0) %>% #for some reason it only works with a zero buffer
   st_make_valid()
-
-#make id column, get year
-all_fields <- all_fields_binded%>% 
-  st_make_valid() %>% 
-  rownames_to_column(var="ID") %>% 
-  mutate(year = lubridate::year(dt_act)) %>% 
-  dplyr::select(-dt_act) %>% 
-  mutate(township_range = str_c(township, "_", range)) %>% 
-  mutate(pmt_site_year = str_c(year, "_", pmt_site))
-
-#select just pmt_site_year
-all_fields_single_col <- all_fields %>% 
-  dplyr::select(pmt_site_year) %>% 
-  st_make_valid() %>% 
-  st_buffer(dist = 0)
 
 
 #write to shapefile
-#st_write(all_fields_single_col, "data/shapefiles_written/2005-2020kernfields.shp")
-
-
-#NOTES
-#need to add in 2021 (which has different col names)
-#need crops in final product?
-#when uploaded to mapshaper, click one or both boxes?
+#st_write(kernfield_clean, "data/shapefiles_written/1997-2021kernfields.shp", driver = "ESRI Shapefile")
 ```
 
-Take the resulting shapefile `sample_clean.shp` and upload it to mapshaper's online interface (https://mapshaper.org/). Then enter in the command line `$ mosaic` and download results as a shapefile, as seen in the next code chunk.
+Take the resulting shapefile `sample_clean.shp` and upload it to mapshaper's online interface (https://mapshaper.org/). Select the box saying "detect line intersections" and the box "snap vertices". Then enter in the console `$ mosaic`. The processing can take 30-45 minutes. Download results as a shapefile by clicking export and selecting shapefile. It will download in a zipfile.
 
 This thread could potentially improve workflow https://github.com/mbloch/mapshaper/issues/353 
 
-# Using Mapshaper outputs
+# Using Mapshaper outputs to create pivot table (where col name is from year and rows are smallest intersection of fields)
 
 ```{r}
 #read in data from mapshaper outputs
-mosiac <- st_read("data/mapshaper_outputs/2005-2020kernfields/2005-2020kernfields.shp") %>% 
-  st_make_valid() %>% 
-  st_transform(crs = st_crs(all_fields_single_col))
+mosaic <- read_sf("data/mapshaper_outputs/1997-2021kernfields/1997-2021kernfields.shp")
 
-#negative buffer and intersect with field data
-sample_join <- st_intersection(st_buffer(mosiac, dist = -1), all_fields_single_col)
-
-#pivot so each column is a year
-sample_pivot <- sample_join %>% 
-  separate(pmt_site_year, into = c("year", "pmt_site"), sep = "_") %>% 
-  select(-FID) %>% 
-  pivot_wider(names_from = year, values_from = pmt_site) %>%
-  st_sf() %>% 
-  st_buffer(dist = 0) %>% 
+#drop polys under one acre and clean
+mosaic_drop_acre <- mosaic %>%
+  mutate(area_sq_ft = st_area(.)) %>% 
+  filter(area_sq_ft >= units::set_units(43560,"ft^2")) %>% 
+  st_transform(crs = "+proj=aea +lat_1=29.5 +lat_2=45.5 +lat_0=23 +lon_0=-96 +x_0=0 +y_0=0 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs") %>% 
   st_make_valid()
 
+#negative buffer and intersect with field data
+kernfield_join <- st_intersection(st_buffer(mosaic_drop_acre, dist = -1), kernfield_clean, left = T)
+
+#pivot so each column is a year
+kernfield_pivot <- kernfield_join %>% 
+  separate(pmt_site_string, into = c("year", "pmt_site"), sep = "_") %>% 
+  select(-c(FID, area_sq_ft)) %>% 
+  pivot_wider(names_from = year, values_from = pmt_site) %>%
+  st_sf() %>% 
+  st_buffer(dist = 1)
+
 #write to csv
-write_csv(sample_pivot, "data/shapefiles_written/2005-2020_pivoted.csv")
+write_csv(kernfield_pivot, "data/shapefiles_written/1997-2021_pivoted.csv")
 ```
