@@ -87,7 +87,7 @@ This thread could potentially improve workflow https://github.com/mbloch/mapshap
 
 ```{r}
 #read in mapshaper output
-sample_mosiac <- st_read("data/mapshaper_outputs/sample_clean/sample_clean.shp")
+sample_mosiac <- read_sf("data/mapshaper_outputs/sample_clean/sample_clean.shp")
 
 #intersect with field data 
 sample_join <- st_intersection(st_buffer(sample_mosiac, dist = -1), sample_clean)
