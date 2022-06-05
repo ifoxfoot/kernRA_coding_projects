@@ -115,20 +115,23 @@ kernfield_pivot <- kernfield_join %>%
   st_sf() %>% 
   st_buffer(dist = 1)
 
-#making a df without pmt_sites for export to explore
+#drop shapes under an acre again
 kernfield_pivot_over_acre <- kernfield_pivot %>%
   mutate(area = st_area(.)) %>% 
   filter(area >= units::set_units(1,"acre"))
+
+#converting list to strings of characters so I can save to csv
+kernfield_pivot_over_acre = data.frame(lapply(kernfield_pivot_over_acre, as.character), stringsAsFactors=FALSE)
 
 #write to csv
 write_csv(kernfield_pivot_over_acre, "data/shapefiles_written/1997-2021_pivoted.csv")
 
 #write to shapefile
-st_write(kernfield_pivot_test_shp, "data/shapefiles_written/1997-2021_pivoted.shp", driver = "ESRI Shapefile")
+st_write(kernfield_pivot_test_shp, "data/shapefiles_written/1997-2021_pivoted.shp", driver = "ESRI Shapefile", append = F)
 ```
-
+sample_pivot2 = data.frame(lapply(sample_pivot, as.character), stringsAsFactors=FALSE)
 
 ```{r}
-
+pivot_table <- read_csv("data/shapefiles_written/1997-2021_pivoted.csv")
 ```
 
