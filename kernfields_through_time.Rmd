@@ -22,9 +22,7 @@ library(tmap) #for interactive maps
 library(reshape2) #for melting and recasting data frames (long to wide format)
 ```
 
-# Introduction
-
-# Read in field data and wrangle it
+## Read in field data and bind it together
 
 In this section read in the field data and wrangle it such that the end product is a single SF object where each row is a field and the columns are for geometry and for permitsite ID, crop code, and year, which are merged to single string.
 
@@ -43,7 +41,8 @@ for (i in kern_field_years) {
 }
 
 kernfields_2021 <- kernfields_2021 %>% 
-  mutate(comm = Commodity)
+  mutate(comm = Commodity) %>% 
+  mutate(comm_code = COMM_COD_1)
 
 #loop through listed sf objects and tidy
 fields_cleaned_list <- lapply(mget(sprintf("kernfields_%d", 1997:2021)), 
@@ -63,24 +62,97 @@ kernfield_bind <- do.call(rbind, lapply(names(fields_cleaned_list),
                                     function(x) 
                                       cbind(fields_cleaned_list[[x]], 
                                             source = x)
-                                    )) %>% 
-    #turn source column into year column by keeping only numbers
-    mutate(year = gsub("\\D", "", source)) %>% 
-    #Create ID column
-    mutate(id = row_number()) %>% 
-    #merge comm code to pmt_site
-    mutate(pmt_site_code = str_c(pmt_site, "-", comm)) %>% 
-    #merge ID to  pmt_site
-    mutate(pmt_site_id = str_c(pmt_site_code, "-", id)) %>% 
-    #merge this column with year
-    mutate(pmt_site_string = str_c(year, "_", pmt_site_id))
+                                    ))
+```
 
-#select only column we need, clean geometry
-kernfield_clean <- kernfield_bind %>% 
+## Fix crop codes so they are consistent accross years 
+
+```{r field_data_wrangling}
+#fixing commodity codes (only in post-2017 data)
+
+#get unique commodities from all years
+unique_crops <- as.data.frame(unique(kernfield_bind$comm)) %>% 
+  rename(comm = `unique(kernfield_bind$comm)`)
+
+#get comm codes and crops from 2017-2019
+comm_codes_pre_20 <- rbind(kernfields_2017, kernfields_2018, kernfields_2019, kernfields_2019) %>% 
+  clean_names() %>% 
+  st_drop_geometry() %>%
+  select(comm_code, comm)
+
+#comm codes from 2020
+comm_2020 <- kernfields_2020 %>% 
+  select(COMM_CODE, COMM) %>%
+  st_drop_geometry() %>%
+  clean_names()
+
+#comm codes from 2021
+comm_2021 <- kernfields_2021 %>% 
+  select(comm_code, comm) %>%
+  st_drop_geometry() %>%
+  clean_names()
+
+#bind them together, find every unique comm and its matching code
+comm_codes_all <- rbind(comm_codes_pre_20, comm_2020, comm_2021) %>% 
+  group_by(comm) %>% 
+  unique()
+
+#left join codes with crops
+comm_with_crops <- left_join(unique_crops, comm_codes_all) %>% 
+  mutate(comm_code = case_when(comm == "ALFALFA SEED" ~ "23001", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "ARRUGULA" ~ "13056", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "BARLEY FOR/FOD-" ~ "22008", T ~ comm_code)) %>%
+  mutate(comm_code = case_when(comm == "BARLEY SEED" ~ "22008", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "BEAN DRIED SEED" ~ "15001", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "BEAN SUC SEED" ~ "15003", T ~ comm_code)) %>%
+  mutate(comm_code = case_when(comm == "BEET SEED" ~ "29109", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "CAULIFLOWR SEED" ~ "13008", T ~ comm_code)) %>%
+  mutate(comm_code = case_when(comm == "CELERY SEED" ~ "29113", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "CORN SEED" ~ "24002", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "GRAPE (RAISIN)" ~ "29141", T ~ comm_code)) %>%
+  mutate(comm_code = case_when(comm == "GRAPE (WINE)" ~ "29143", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "MELON SEED" ~ "29122", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "OAT SEED" ~ "29125", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "ONION GR SEED" ~ "16004", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "PARSLEY SEED" ~ "13022", T ~ comm_code)) %>%
+  mutate(comm_code = case_when(comm == "RADISH SEED" ~ "14014", T ~ comm_code)) %>%
+  mutate(comm_code = case_when(comm == "SAFFLOWER SEED" ~ "29129", T ~ comm_code)) %>%
+  mutate(comm_code = case_when(comm == "SORGHUM SEED" ~ "29131", T ~ comm_code)) %>%
+  mutate(comm_code = case_when(comm == "WHEAT SEED" ~ "29139", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "COTTON FOR/FOD" ~ "29121", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(comm == "OF-DEC. TREE" ~ "152", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(str_detect(comm, "OP-") ~ "154", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(str_detect(comm, "OT-") ~ "156", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(str_detect(comm, "PEAS ") ~ "29127", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(str_detect(comm, "TURNIP") ~ "29137", T ~ comm_code)) %>% 
+  mutate(comm_code = case_when(str_detect(comm, "VEGETABLE") ~ "13000", T ~ comm_code))
+
+#replace all remaining NA codes with number starting with 99
+comm_with_crops$comm_code[is.na(comm_with_crops$comm_code)] <- sample(9900:9999, size = sum(is.na(comm_with_crops$comm_code)), replace = F)
+
+#make sure chinese green codes are same for seed and conventional version
+comm_with_crops <- comm_with_crops %>% 
+  mutate(comm_code = case_when(comm == "CHINESE GR SEED" ~ "9998", T ~ comm_code))
+
+#merge codes to field data, now each observation has a crop code
+kernfield_comm_code <- merge(kernfield_bind, comm_with_crops, by = "comm")
+
+#now create column with year, pmt_site, id, and crop code
+kernfield_clean <- kernfield_comm_code %>%
+  #turn source column into year column by keeping only numbers
+  mutate(year = gsub("\\D", "", source)) %>% 
+  #Create ID column
+  mutate(id = row_number()) %>% 
+  #merge comm code to pmt_site
+  mutate(pmt_site_code = str_c(pmt_site, "-", comm_code)) %>% 
+  #merge ID to  pmt_site
+  mutate(pmt_site_id = str_c(pmt_site_code, "-", id)) %>% 
+  #merge this column with year
+  mutate(pmt_site_string = str_c(year, "_", pmt_site_id)) %>% 
+  #select only column we need, clean geometry
   dplyr::select(pmt_site_string) %>% 
   st_buffer(dist = 0) %>% #for some reason it only works with a zero buffer
   st_make_valid()
-
 
 #write to shapefile
 #st_write(kernfield_clean, "data/shapefiles_written/1997-2021kernfields.shp", driver = "ESRI Shapefile")
@@ -90,7 +162,8 @@ Take the resulting shapefile `sample_clean.shp` and upload it to mapshaper's onl
 
 This thread could potentially improve workflow https://github.com/mbloch/mapshaper/issues/353 
 
-# Using Mapshaper outputs to create pivot table (where col name is from year and rows are smallest intersection of fields)
+## Create pivot table using mapshaper 
+(where col name is from year and rows are smallest intersection of fields)
 
 ```{r}
 #read in data from mapshaper outputs
@@ -117,21 +190,163 @@ kernfield_pivot <- kernfield_join %>%
 
 #drop shapes under an acre again
 kernfield_pivot_over_acre <- kernfield_pivot %>%
-  mutate(area = st_area(.)) %>% 
-  filter(area >= units::set_units(1,"acre"))
+  mutate(area_meters_sq = st_area(.)) %>% 
+  filter(area_meters_sq >= units::set_units(1,"acre"))
 
 #converting list to strings of characters so I can save to csv
-kernfield_pivot_over_acre = data.frame(lapply(kernfield_pivot_over_acre, as.character), stringsAsFactors=FALSE)
+#kernfield_pivot_over_acre = data.frame(lapply(kernfield_pivot_over_acre, as.character), stringsAsFactors=FALSE)
 
 #write to csv
-write_csv(kernfield_pivot_over_acre, "data/shapefiles_written/1997-2021_pivoted.csv")
-
-#write to shapefile
-st_write(kernfield_pivot_test_shp, "data/shapefiles_written/1997-2021_pivoted.shp", driver = "ESRI Shapefile", append = F)
+#write_csv(kernfield_pivot_over_acre, "data/shapefiles_written/1997-2021_pivoted.csv")
 ```
-sample_pivot2 = data.frame(lapply(sample_pivot, as.character), stringsAsFactors=FALSE)
+
+## Calculate fallowed stats
+
+In this section I calculate the total number of years fallowed, the greatest number of years fallowed in a row, the start of the streak, the end of the streak, and the last active crop before the streak
 
 ```{r}
-pivot_table <- read_csv("data/shapefiles_written/1997-2021_pivoted.csv")
+#read in csv
+#pivot_table <- read_csv("data/shapefiles_written/1997-2021_pivoted.csv")
+
+#make sure cols are in order (from earliest year to latest year)
+pivot_table <- kernfield_pivot_over_acre %>% 
+  select(sort(names(.))) %>%
+  #add id column
+  mutate(id = rownames(.))
+
+#make names numeric
+#colnames(pivot_table) <- c("area_meters_sq", "geometry", 1997:2021, "id")
+
+#create list of years
+#kern_field_years <- c(1997:2021)
+
+#create dataset for for for loop to loop over
+fallowed_sample_pivot <- pivot_table
+
+#for loop that creates a new column per each year, that indicated if field was fallowed or not
+for (i in kern_field_years) {
+fallowed_sample_pivot <- fallowed_sample_pivot %>%
+  mutate(!!paste0("fallowed_", i) 
+         := case_when(!!as.name(i) == "NULL" ~ "fallowed",
+                      str_detect(!!as.name(i), "-66000-") & 
+                        str_detect(!!as.name(i), ", ", negate = T) ~ "fallowed",
+                            T ~ "active"))
+}
+
+#drop geometry
+fallowed_sample_no_geo <- fallowed_sample_pivot %>% 
+  st_drop_geometry()
+
+#transform wide data to the long format
+sample_long = melt(fallowed_sample_no_geo, id.vars = c("1997":"2021", "area_meters_sq", "id")) 
+
+#write new column names
+colnames(sample_long) = c("1997":"2021", "area_meters_sq", "id", "year", "status")
+
+#calculate how long each field has been fallowed by counting repeated fallowed status within rows
+sample_long_mutate = sample_long %>%
+  #created p-columns that correspond to year
+  mutate(p_var = paste0("years_fallowed_", substr(year, 10, 14))) %>% 
+  group_by(id) %>%
+  #create column that counts how many active or fallowed are in a row
+  mutate(lapsed_num = sequence(rle(status)[["lengths"]]),
+         #only keep fallowed streaks, if active it has been fallowed zero years so replace with zero
+         final = ifelse(status == "active", 0, 
+                           ifelse(str_detect(status, "fallowed"), 
+                                  lapsed_num, NA))) %>% 
+  select(-lapsed_num) %>% 
+  data_frame()
+
+#convert if from long format to wide format 
+#NOTE: col names need to be changed when more years are added
+df_p = dcast(sample_long_mutate[, c(1:29, 30:31)], id  ~ p_var,  value.var = "final")
+
+#merge it with original data
+years_fallowed = merge(df_p, fallowed_sample_pivot, id = id) %>%
+  select(-c(starts_with("fallowed_"))) %>% 
+  mutate(total_yrs_fallowed = rowSums(select(.,starts_with("years_fallowed"))!=0))
+
+#create df of only fallow numbers
+longest_fallow <- years_fallowed %>%
+  select(starts_with("years_fallowed"))
+
+#create a column indicating where the fallow streak ends (based on max value)
+longest_fallow$end_fallow_streak<-colnames(longest_fallow)[apply(longest_fallow, 1, which.max)]
+
+#calculate how long the fallowed streak was
+longest_fallow_years <- longest_fallow %>%
+  mutate(longest_fallow_streak = do.call(
+    pmax, subset(., select = years_fallowed_1997:years_fallowed_2021))) %>% 
+  mutate(end_fallow_streak = str_extract(end_fallow_streak, "\\d+")) %>%
+  select(longest_fallow_streak, end_fallow_streak)
+
+#add column that says start year of fallow crop
+longest_fallow_years$start_fallow_streak <- 
+  as.numeric(longest_fallow_years$end_fallow_streak) - 
+  as.numeric(longest_fallow_years$longest_fallow_streak)
+  
+#bind these new columns with orginal data
+years_fallowed_clean <- cbind(years_fallowed, longest_fallow_years) %>% 
+  select(-starts_with("years_fallowed"))
+
+#replaces year with last active crop
+last_crop <- years_fallowed_clean %>%
+  mutate(last_crop_before_streak = 
+           case_when(start_fallow_streak == 1996 ~ "starts_fallowed",
+                     start_fallow_streak == 1997 ~ as.character(`1997`),
+                     start_fallow_streak == 1998 ~ as.character(`1998`),
+                     start_fallow_streak == 1999 ~ as.character(`1999`),
+                     start_fallow_streak == 2000 ~ as.character(`2000`),
+                     start_fallow_streak == 2001 ~ as.character(`2001`),
+                     start_fallow_streak == 2002 ~ as.character(`2002`),
+                     start_fallow_streak == 2003 ~ as.character(`2003`),
+                     start_fallow_streak == 2004 ~ as.character(`2004`),
+                     start_fallow_streak == 2005 ~ as.character(`2005`),
+                     start_fallow_streak == 2006 ~ as.character(`2006`),
+                     start_fallow_streak == 2007 ~ as.character(`2007`),
+                     start_fallow_streak == 2008 ~ as.character(`2008`),
+                     start_fallow_streak == 2009 ~ as.character(`2009`),
+                     start_fallow_streak == 2010 ~ as.character(`2010`),
+                     start_fallow_streak == 2011 ~ as.character(`2011`),
+                     start_fallow_streak == 2012 ~ as.character(`2012`),
+                     start_fallow_streak == 2013 ~ as.character(`2013`),
+                     start_fallow_streak == 2014 ~ as.character(`2014`),
+                     start_fallow_streak == 2015 ~ as.character(`2015`),
+                     start_fallow_streak == 2016 ~ as.character(`2016`),
+                     start_fallow_streak == 2017 ~ as.character(`2017`),
+                     start_fallow_streak == 2018 ~ as.character(`2018`),
+                     start_fallow_streak == 2019 ~ as.character(`2019`),
+                     start_fallow_streak == 2020 ~ as.character(`2020`),
+                                    T ~ as.character(`2021`)))
+
+#cleaning up cols
+last_crop_clean <- last_crop %>% 
+  mutate(last_crop_before_streak = 
+           case_when(longest_fallow_streak == "0" ~ "never_fallowed",
+                     T ~ as.character(last_crop_before_streak))) %>% 
+  mutate(end_fallow_streak = 
+           case_when(longest_fallow_streak == "0" ~ NA_character_,
+                     T ~ as.character(end_fallow_streak))) %>% 
+   mutate(start_fallow_streak = 
+           case_when(longest_fallow_streak == "0" ~ NA_character_,
+                     T ~ as.character(start_fallow_streak))) %>% 
+  select(-id)
+
+#unnest listed pmt_site so they are each in own column
+pivot_clean_data <- last_crop_clean %>% 
+  unnest_wider(c(`1997`:`2021`), names_sep = "_")
+
+#store as sf
+pivot_clean_sf <- pivot_clean_data %>% 
+  st_as_sf()
+
+#write to csv
+write_csv(pivot_clean_data, "data/shapefiles_written/1997-2021_pivoted_clean.csv")
+
+#write to shapefile
+st_write(pivot_clean_data, "data/shapefiles_written/1997-2021_pivoted_clean.shp")
+
+
 ```
+
 

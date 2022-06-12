@@ -101,6 +101,15 @@ sample_pivot <- sample_join %>%
   st_buffer(dist = 1) %>%
   mutate(area_sq_ft = st_area(.))
 
+#converting list to strings of characters so I can save to csv
+sample_pivot = data.frame(lapply(sample_pivot, as.character), stringsAsFactors=FALSE)
+
+#write to shapefile without separating list cols
+write.csv(sample_pivot, "data/shapefiles_written/sample_pivoted.csv")
+```
+
+
+```{r}
 #unnest listed pmt_site so they are each in own column
 sample_pivot_sep <- sample_pivot %>% 
   unnest_wider(c(`2017`, `2018`, `2019`), names_sep = "_")
@@ -285,13 +294,19 @@ tm_shape(neg_sample_pivot) +
 # Creating table with max length of fallowed streak and year the streak ended
 
 ```{r}
-#identifying fallowed fields function
+#read back in CSV for list col formatted pivot table
+pivot_table <- read.csv("data/shapefiles_written/sample_pivoted.csv")
+
+#make names numeric
+colnames(pivot_table) <- c("id", "geometry", 2017:2019, "area_sq_ft")
+
+#create list of years
 years <- c(2017, 2018, 2019)
 
 #create dataset for for for loop to loop over
-fallowed_sample_pivot <- sample_pivot
+fallowed_sample_pivot <- pivot_table
 
-#for loop that creates a new column per each year, indicating if field was fallowed or not
+#for loop that creates a new column per each year, that indicated if field was fallowed or not
 for (i in years) {
 fallowed_sample_pivot <- fallowed_sample_pivot %>%
   mutate(!!paste0("fallowed_", i) 
@@ -301,96 +316,87 @@ fallowed_sample_pivot <- fallowed_sample_pivot %>%
                             T ~ "active"))
 }
 
-#create a unique id column from row numbers
-fallowed_sample_pivot <- fallowed_sample_pivot %>% 
-  mutate(fallow_count_id = row_number())
-
 #drop geometry
 fallowed_sample_no_geo <- fallowed_sample_pivot %>% 
-  st_drop_geometry()
+  select(-geometry)
 
 #transform wide data to the long format
-sample_long = melt(fallowed_sample_no_geo, id.vars = c("2017", "2018", "2019", "area_sq_ft", "fallow_count_id")) 
+sample_long = melt(fallowed_sample_no_geo, id.vars = c("2017", "2018", "2019", "area_sq_ft", "id")) 
 
 #write new column names
-colnames(sample_long) = c("2017", "2018", "2019", "area_sq_ft", "fallow_count_id", "year", "status")
+colnames(sample_long) = c("2017", "2018", "2019", "area_sq_ft", "id", "year", "status")
 
-#calculate how long each field has been fallowed by countying repeated fallowed status within rows
+#calculate how long each field has been fallowed by counting repeated fallowed status within rows
 sample_long_mutate = sample_long %>%
   #created p-columns that correspond to year
   mutate(p_var = paste0("years_fallowed_", substr(year, 10, 14))) %>% 
-  group_by(fallow_count_id) %>%
+  group_by(id) %>%
   #create column that counts how many active or fallowed are in a row
   mutate(lapsed_num = sequence(rle(status)[["lengths"]]),
+         #only keep fallowed streaks, if active it has been fallowed zero years so replace with zero
          final = ifelse(status == "active", 0, 
                            ifelse(str_detect(status, "fallowed"), 
-                                  lapsed_num, NA))) %>%
+                                  lapsed_num, NA))) %>% 
   select(-lapsed_num) %>% 
   data_frame()
 
-#convert if from long format to wide format #NOTE: col names need to be changed when more years are added
-df_p = dcast(sample_long_mutate[, c(1:7, 8:9)], fallow_count_id  ~ p_var,  value.var = "final")
+#convert if from long format to wide format 
+#NOTE: col names need to be changed when more years are added
+df_p = dcast(sample_long_mutate[, c(1:7, 8:9)], id  ~ p_var,  value.var = "final")
 
 #merge it with original data
-years_fallowed = merge(df_p, fallowed_sample_pivot, id = fallow_count_id) %>%
-  select(-c(fallowed_2017:fallowed_2019)) %>% 
-  st_sf()
+years_fallowed = merge(df_p, fallowed_sample_pivot, id = id) %>%
+  select(-c(starts_with("fallowed_"))) %>% 
+  mutate(total_yrs_fallowed = rowSums(select(.,starts_with("years_fallowed"))!=0))
 
 #create df of only fallow numbers
 longest_fallow <- years_fallowed %>%
-  select(years_fallowed_2017:years_fallowed_2019) %>% 
-  st_drop_geometry()
+  select(starts_with("years_fallowed"))
 
 #create a column indicating where the fallow streak ends (based on max value)
 longest_fallow$end_fallow_streak<-colnames(longest_fallow)[apply(longest_fallow, 1, which.max)]
 
 #calculate how long the fallowed streak was
-longest_fallow <- longest_fallow %>% 
-  mutate(max_years_fallow = pmax(years_fallowed_2017, years_fallowed_2018, years_fallowed_2019)) %>% 
-  mutate(end_fallow_streak = str_extract(end_fallow_streak, "\\d+")) %>% 
-  select(max_years_fallow, end_fallow_streak)
+longest_fallow_years <- longest_fallow %>% 
+  mutate(longest_fallow_streak = pmax(years_fallowed_2017, years_fallowed_2018, years_fallowed_2019)) %>% 
+  mutate(end_fallow_streak = str_extract(end_fallow_streak, "\\d+")) %>%
+  select(longest_fallow_streak, end_fallow_streak)
+
+#add column that says start year of fallow crop
+longest_fallow_years$start_fallow_streak <- 
+  as.numeric(longest_fallow_years$end_fallow_streak) - as.numeric(longest_fallow_years$longest_fallow_streak)
   
 #bind these new columns with orginal data
-years_fallowed_clean <- cbind(sample_pivot_sep, longest_fallow)
+years_fallowed_clean <- cbind(years_fallowed, longest_fallow_years) %>% 
+  select(-starts_with("years_fallowed"))
 ```
-
-Iris use this thread
-
-https://stackoverflow.com/questions/39575664/r-for-loop-creating-new-columns-populated-by-conditional-statement-based-on-the 
 
 
 ```{r}
-#tells me what year the last active crops where
-last_crop_df<- years_fallowed %>%
-  mutate(`2016` = "outside_time_range") %>% 
-  mutate(last_crop_2019 =
-           case_when(fallowed_2019 == "fallowed" 
-                                   ~ as.character(eval(2019 - p2019)),
-                                   T ~ "2019")) %>% 
-  mutate(last_crop_final = "find_me")
-
-
-for(i in 2017:2019) {
-  final_last_crop <- last_crop_df %>%
-    mutate(last_crop_final = case_when(last_crop_2019 == as.character(i) ~ as.character(!!as.name(i)),
-                                T ~ last_crop_final))
-}
-
 #replaces year with last active crop
-last_crop_mutate <- last_crop_df%>%
-  mutate(last_crop_2019 = case_when(last_crop_2019 == "2016" ~ as.character(`2016`),
-                                    last_crop_2019 == "2017" ~ as.character(`2017`),
-                                    last_crop_2019 == "2018" ~ as.character(`2018`),
+last_crop <- years_fallowed_clean %>%
+  mutate(last_crop_before_streak = 
+           case_when(start_fallow_streak == 2016 ~ "starts_fallowed",
+                     start_fallow_streak == 2017 ~ as.character(`2017`),
+                     start_fallow_streak == 2018 ~ as.character(`2018`),
                                     T ~ as.character(`2019`)))
 
 #cleaning up cols
-last_crop_clean <- last_crop_mutate %>% 
-  mutate(years_fallowed_2019 = 
-         case_when(fallowed_2019 == "not_fallowed" ~ "0",
-                  T ~ as.character(p2019))) %>% 
-  select(-c(fallowed_2017:fallowed_2019, p2017:p2019, `2016`, fallow_count_id))
+last_crop_clean <- last_crop %>% 
+  mutate(last_crop_before_streak = 
+           case_when(longest_fallow_streak == "0" ~ "never_fallowed",
+                     T ~ as.character(last_crop_before_streak))) %>% 
+  mutate(end_fallow_streak = 
+           case_when(longest_fallow_streak == "0" ~ NA_character_,
+                     T ~ as.character(end_fallow_streak))) %>% 
+   mutate(start_fallow_streak = 
+           case_when(longest_fallow_streak == "0" ~ NA_character_,
+                     T ~ as.character(start_fallow_streak)))
 
-  
+
+#unnest listed pmt_site so they are each in own column
+sample_clean_data <- last_crop_clean %>% 
+  unnest_wider(c(`2017`, `2018`, `2019`), names_sep = "_")
 
 ```
 
